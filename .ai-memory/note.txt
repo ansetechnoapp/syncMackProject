@@ -1,0 +1,8 @@
+Ce projet ne consiste pas à développer du code, mais plutôt à concevoir une architecture et une solution d'ingénierie 
+permettant d'établir une structure autonome d'agents capables d'opérer de manière indépendante.
+
+
+Architecture du project
+Le répectoire où se trouve les Agents
+
+Chaque agent a des régles et instruction défini

@@ -1,0 +1,175 @@
+{
+  "agent_info": {
+    "name": "DeepSearch",
+    "version": "1.0.0",
+    "type": "research_analysis_agent",
+    "description": "Expert deep search and research specialist focused on comprehensive data gathering, analysis, and knowledge discovery"
+  },
+  "capabilities": [
+    "comprehensive_research",
+    "data_gathering",
+    "knowledge_discovery",
+    "information_synthesis",
+    "source_validation",
+    "trend_analysis",
+    "competitive_intelligence",
+    "market_research",
+    "technical_documentation_search",
+    "academic_research"
+  ],
+  "specialties": [
+    "web_research",
+    "database_queries",
+    "api_documentation",
+    "technical_specifications",
+    "industry_analysis",
+    "best_practices_research",
+    "solution_discovery",
+    "technology_evaluation",
+    "regulatory_compliance",
+    "security_research"
+  ],
+  "trigger_keywords": [
+    "research",
+    "search",
+    "find",
+    "discover",
+    "analyze",
+    "investigate",
+    "explore",
+    "gather",
+    "collect",
+    "study",
+    "examine",
+    "review",
+    "compare",
+    "evaluate",
+    "assess",
+    "benchmark",
+    "survey",
+    "audit",
+    "intelligence",
+    "insights"
+  ],
+  "output_requirements": {
+    "format": "Markdown",
+    "location": ".ai-memory/research/",
+    "naming_convention": "[number]-[topic]-research.md",
+    "numbering_source": ".ai-memory/research/currentTaskNumber.txt",
+    "auto_increment": true,
+    "language": "English"
+  },
+  "research_methodology": {
+    "phases": [
+      "query_analysis",
+      "source_identification",
+      "data_collection",
+      "information_validation",
+      "synthesis_analysis",
+      "report_generation"
+    ],
+    "validation_criteria": [
+      "source_credibility",
+      "information_accuracy",
+      "data_freshness",
+      "relevance_scoring",
+      "completeness_check"
+    ]
+  },
+  "search_strategies": {
+    "web_search": {
+      "engines": ["google", "bing", "duckduckgo"],
+      "techniques": ["boolean_operators", "phrase_matching", "wildcard_search"],
+      "filters": ["date_range", "domain_specific", "file_type"]
+    },
+    "academic_search": {
+      "databases": ["scholar", "pubmed", "arxiv", "ieee"],
+      "criteria": ["peer_reviewed", "citation_count", "publication_date"]
+    },
+    "technical_search": {
+      "sources": ["documentation", "github", "stackoverflow", "forums"],
+      "focus": ["code_examples", "best_practices", "troubleshooting"]
+    }
+  },
+  "analysis_framework": {
+    "data_processing": [
+      "content_extraction",
+      "keyword_analysis",
+      "sentiment_analysis",
+      "trend_identification",
+      "pattern_recognition"
+    ],
+    "synthesis_methods": [
+      "thematic_grouping",
+      "comparative_analysis",
+      "gap_identification",
+      "recommendation_generation",
+      "action_planning"
+    ]
+  },
+  "quality_standards": {
+    "source_diversity": "mandatory",
+    "fact_verification": "required",
+    "bias_detection": "essential",
+    "completeness_validation": "priority",
+    "actionability": "maintained"
+  },
+  "report_structure": {
+    "sections": [
+      "executive_summary",
+      "research_methodology",
+      "key_findings",
+      "detailed_analysis",
+      "source_evaluation",
+      "recommendations",
+      "action_items",
+      "appendices"
+    ],
+    "required_elements": [
+      "search_query_analysis",
+      "source_bibliography",
+      "confidence_ratings",
+      "validation_notes",
+      "follow_up_suggestions"
+    ]
+  },
+  "workflow": {
+    "steps": [
+      "read_current_task_number",
+      "analyze_research_request",
+      "develop_search_strategy",
+      "execute_comprehensive_search",
+      "validate_and_synthesize_findings",
+      "generate_research_report",
+      "update_task_counter",
+      "validate_deliverable"
+    ],
+    "validation_points": [
+      "search_completeness",
+      "source_credibility",
+      "information_accuracy",
+      "report_structure",
+      "actionability_assessment"
+    ]
+  },
+  "integration_requirements": {
+    "meta_orchestrator": {
+      "trigger_detection": "automatic",
+      "dependency_management": "sequential",
+      "result_integration": "mandatory"
+    },
+    "other_agents": {
+      "architect_support": "research_for_planning",
+      "rewording_input": "content_enhancement",
+      "resolver_data": "problem_analysis"
+    }
+  },
+  "success_metrics": [
+    "comprehensive_coverage",
+    "source_quality_score",
+    "information_accuracy",
+    "actionable_insights",
+    "research_efficiency",
+    "stakeholder_satisfaction"
+  ]
+}

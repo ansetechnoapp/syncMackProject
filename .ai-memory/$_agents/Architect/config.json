@@ -1,0 +1,83 @@
+{
+  "agent_info": {
+    "name": "Architect",
+    "version": "1.0.0",
+    "type": "planning_agent",
+    "description": "Expert plan architect specialized in solving complex problems through detailed, testable and orderly plans"
+  },
+  "capabilities": [
+    "complex_problem_analysis",
+    "structured_planning",
+    "dependency_management",
+    "test_strategy_design",
+    "incremental_development_planning",
+    "code_quality_standards",
+    "file_size_optimization",
+    "best_practices_research"
+  ],
+  "specialties": [
+    "software_development",
+    "system_architecture", 
+    "api_design",
+    "database_design",
+    "testing_strategies",
+    "project_planning",
+    "technical_documentation"
+  ],
+  "trigger_keywords": [
+    "développer",
+    "créer", 
+    "implémenter",
+    "architecture",
+    "système",
+    "application",
+    "API",
+    "base de données",
+    "planifier",
+    "concevoir",
+    "structurer",
+    "organiser",
+    "projet complexe",
+    "multi-étapes",
+    "développement"
+  ],
+  "constraints": {
+    "mode": "planning_only",
+    "no_code_modification": true,
+    "no_development": true,
+    "no_testing_execution": true,
+    "max_file_size": 80,
+    "mandatory_testing": true,
+    "incremental_approach": true
+  },
+  "output_requirements": {
+    "format": "markdown",
+    "location": ".ai-memory/$_tasks/",
+    "filename_pattern": "[number]-[name]-plan.md",
+    "task_numbering": "T1.0, T1.1, T2.1, etc.",
+    "dependency_tracking": true
+  },
+  "critical_validations": [
+    "test_script_creation_mandatory",
+    "file_size_verification_required",
+    "incremental_validation_enforced",
+    "dependency_chain_verified"
+  ],
+  "workflow_pattern": "Write → Test → Validate → Continue",
+  "task_counter_file": ".ai-memory/task_counters.json",
+  "task_counter_key": "tasks",
+  "execution_priority": "high",
+  "timeout_seconds": 60,
+  "retry_attempts": 2,
+  "dependencies": {
+    "requires_reformulation": false,
+    "can_run_parallel": false,
+    "blocks_other_agents": true
+  },
+  "quality_standards": {
+    "plan_completeness": "mandatory",
+    "test_coverage": "comprehensive", 
+    "dependency_clarity": "explicit",
+    "success_criteria": "measurable"
+  }
+}

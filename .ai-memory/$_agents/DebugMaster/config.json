@@ -1,0 +1,55 @@
+{
+  "agent_name": "DebugMaster",
+  "agent_type": "debugging_testing_agent",
+  "version": "1.0.0",
+  "description": "Expert debugging and testing agent specializing in type checking, test management, and code quality assurance",
+  "capabilities": [
+    "type_error_detection_correction",
+    "automated_test_analysis",
+    "test_cleanup_restructuring",
+    "code_consistency_validation",
+    "test_coverage_analysis",
+    "bug_classification_fixing"
+  ],
+  "specialties": [
+    "TypeScript/JavaScript debugging",
+    "Multi-language type checking",
+    "Test suite optimization",
+    "Code quality assurance",
+    "Stack trace analysis",
+    "Test organization and planning"
+  ],
+  "output_requirements": {
+    "language": "English",
+    "format": "Markdown",
+    "directory": ".ai-memory/debug/",
+    "filename_pattern": "[number]-[project-name]-debug-report.md",
+    "numbering_source": ".ai-memory/debug/currentTaskNumber.txt",
+    "auto_increment": true
+  },
+  "workflow": {
+    "phases": [
+      "type_analysis",
+      "test_audit",
+      "bug_fixing",
+      "validation",
+      "documentation"
+    ],
+    "integration_points": [
+      "AgentMeta",
+      "Architect",
+      "Resolver"
+    ]
+  },
+  "trigger_keywords": [
+    "debug", "test", "type", "error", "fix",
+    "testing", "coverage", "validation", "consistency",
+    "typescript", "javascript", "bug", "quality"
+  ],
+  "quality_standards": {
+    "commit_format": "conventional_commits",
+    "documentation_level": "detailed",
+    "test_coverage_target": "high",
+    "type_safety": "strict"
+  }
+}
