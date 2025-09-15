@@ -1,18 +1,18 @@
-# SyncMark Project Overview
+# SyncMarks Project Overview
 
-Ce dépôt contient deux projets principaux : **SyncMark** et **SyncMark_Helper**.
-
----
-
-## SyncMark
-
-**SyncMark** est le projet principal. Il s'agit probablement d'une application ou d'un service, mais les fichiers fournis ne contiennent pas de détails sur son code source ou ses fonctionnalités. Pour plus d'informations, consultez le dossier `SyncMark` (non inclus dans les extraits).
+Ce dépôt contient deux projets principaux : **SyncMarks** et **SyncMark_Helpers**.
 
 ---
 
-## SyncMark_Helper
+## SyncMarks
 
-**SyncMark_Helper** est un projet d'accompagnement qui contient des outils, des scripts et des interfaces pour assister ou compléter SyncMark.
+**SyncMarks** est le projet principal. Il s'agit probablement d'une application ou d'un service, mais les fichiers fournis ne contiennent pas de détails sur son code source ou ses fonctionnalités. Pour plus d'informations, consultez le dossier `SyncMarks` (non inclus dans les extraits).
+
+---
+
+## SyncMark_Helpers
+
+**SyncMark_Helpers** est un projet d'accompagnement qui contient des outils, des scripts et des interfaces pour assister ou compléter SyncMark.
 
 ### Structure et composants
 
@@ -45,11 +45,11 @@ Ce dépôt contient deux projets principaux : **SyncMark** et **SyncMark_Helper
 
 - Pour lancer l'interface utilisateur :
   ```sh
-  python SyncMark_Helper/syncmark_ui.py
+  python SyncMark_Helpers/syncmark_ui.py
   ```
 - Pour exécuter le host packagé :
   ```sh
-  ./SyncMark_Helper/dist/SyncMarkHost.exe
+  ./SyncMark_Helpers/dist/SyncMarkHost.exe
   ```
 
 ---
@@ -64,5 +64,5 @@ Ce dépôt contient deux projets principaux : **SyncMark** et **SyncMark_Helper
 
 ## Auteur
 
-Ce projet est maintenu par l'équipe SyncMark.
+Ce projet est maintenu par l'équipe SyncMarks.
 
