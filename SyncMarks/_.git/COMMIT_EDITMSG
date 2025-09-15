@@ -1,0 +1,6 @@
+refactor(background): improve native messaging and error handling
+
+- Rewrite native messaging to use promises for better async flow
+- Add comprehensive error handling and connection state management
+- Improve bookmark update logic with better null checks
+- Add detailed jsdoc comments for all functions

@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "SyncMark",
+  "version": "1.0",
+  "description": "Synchronise les favoris avec l'application de bureau SyncMark.",
+  "permissions": [
+    "bookmarks",
+    "nativeMessaging" 
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "images/icon16.png",
+      "48": "images/icon48.png",
+      "128": "images/icon128.png"
+    }
+  }
+}
