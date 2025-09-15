@@ -75,6 +75,12 @@ def process_bookmarks(message):
                     local_bookmarks = json.loads(content)
         except (IOError, json.JSONDecodeError) as e:
             logging.error(f"Impossible de lire ou d'analyser le fichier de favoris local : {e}")
+            # Envoyer un message d'erreur et arrêter le traitement pour éviter la perte de données.
+            send_message({
+                'status': 'error',
+                'message': 'Could not read or parse local bookmarks file. Sync aborted.'
+            })
+            return  # Arrêter la fonction ici
 
     # Logique de fusion : un dictionnaire avec les URLs comme clés pour dédupliquer.
     merged_bookmarks_map = {bm['url']: bm for bm in local_bookmarks if 'url' in bm}
@@ -84,9 +90,17 @@ def process_bookmarks(message):
     logging.info(f"{len(local_bookmarks)} favoris locaux et {len(extension_bookmarks)} de l'extension fusionnés en {len(synced_bookmarks)} favoris uniques.")
 
     # Sauvegarder la liste synchronisée dans le fichier local.
-    with open(BOOKMARKS_FILE_PATH, 'w', encoding='utf-8') as f:
-        json.dump(synced_bookmarks, f, indent=4, ensure_ascii=False)
-    logging.info("Favoris fusionnés enregistrés dans le fichier local.")
+    try:
+        with open(BOOKMARKS_FILE_PATH, 'w', encoding='utf-8') as f:
+            json.dump(synced_bookmarks, f, indent=4, ensure_ascii=False)
+        logging.info("Favoris fusionnés enregistrés dans le fichier local.")
+    except IOError as e:
+        logging.error(f"Impossible d'écrire dans le fichier de favoris local : {e}")
+        send_message({
+            'status': 'error',
+            'message': 'Could not write to local bookmarks file. Sync aborted.'
+        })
+        return # Arrêter la fonction ici
 
     # Envoyer la liste complète et synchronisée à l'extension.
     send_message({'status': 'success', 'bookmarks': synced_bookmarks})
