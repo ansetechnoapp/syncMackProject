@@ -1,0 +1,9 @@
+{
+  "name": "com.syncmark.host",
+  "description": "Programme compagnon pour SyncMark - Synchronisation des favoris",
+  "path": "C:\\Program Files\\SyncMark\\SyncMarkHost.exe",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://EXTENSION_ID_PLACEHOLDER/"
+  ]
+}
