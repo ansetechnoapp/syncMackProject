@@ -1,68 +1,61 @@
-# SyncMarks Project Overview
+# SyncMark - Extension Multi-Navigateurs
 
-Ce dépôt contient deux projets principaux : **SyncMarks** et **SyncMark_Helpers**.
+Synchronisez vos favoris entre tous vos navigateurs (Chrome, Edge, Firefox, Opera, Brave, Vivaldi).
 
----
+## 🚀 Installation Rapide
 
-## SyncMarks
+```bash
+cd scripts/
+install.bat
+```
 
-**SyncMarks** est le projet principal. Il s'agit probablement d'une application ou d'un service, mais les fichiers fournis ne contiennent pas de détails sur son code source ou ses fonctionnalités. Pour plus d'informations, consultez le dossier `SyncMarks` (non inclus dans les extraits).
+## 📁 Structure du Projet
 
----
+- **`extension/`** - Code source et versions compilées de l'extension
+- **`scripts/`** - Scripts d'installation et de maintenance
+- **`tests/`** - Tests et diagnostics
+- **`docs/`** - Documentation complète
 
-## SyncMark_Helpers
+## 🌐 Navigateurs Supportés
 
-**SyncMark_Helpers** est un projet d'accompagnement qui contient des outils, des scripts et des interfaces pour assister ou compléter SyncMark.
+- ✅ Google Chrome
+- ✅ Microsoft Edge
+- ✅ Mozilla Firefox
+- ✅ Opera
+- ✅ Brave Browser  
+- ✅ Vivaldi
+- ✅ Autres navigateurs Chromium
 
-### Structure et composants
+## 📖 Documentation
 
-- **syncmark_ui.py** : Interface utilisateur, probablement basée sur Tkinter.
-- **syncmark_host.py** : Script principal pour l'exécution ou l'hébergement de fonctionnalités.
-- **build/** : Dossier de build contenant les artefacts générés par PyInstaller (fichiers `.toc`, `.pkg`, `.exe`, etc.).
-- **PyInstaller** : Utilisé pour packager l'application en exécutable Windows, avec gestion des dépendances Python et des fichiers binaires.
+Voir le dossier `docs/` pour la documentation complète.
 
-### Fonctionnalités
+## 🔧 Développement
 
-- Prise en charge de nombreux encodages (via le module `encodings`).
-- Utilisation de modules standards Python : collections, codecs, email, json, etc.
-- Génération d'exécutables Windows avec toutes les dépendances nécessaires (DLLs, .pyd, etc.).
-- Gestion des ressources et des fichiers de données pour l'application packagée.
-
----
-
-## Installation
-
-1. Cloner le dépôt :
-   ```sh
-   git clone <repo-url>
-   ```
-2. Installer Python 3.13 et les dépendances requises.
-3. Utiliser PyInstaller pour générer les exécutables si besoin.
-
----
-
-## Exécution
-
-- Pour lancer l'interface utilisateur :
-  ```sh
-  python SyncMark_Helpers/syncmark_ui.py
-  ```
-- Pour exécuter le host packagé :
-  ```sh
-  ./SyncMark_Helpers/dist/SyncMarkHost.exe
-  ```
-
----
-
-## Notes
-
-- Les fichiers `.toc`, `.pkg`, `.exe` sont générés automatiquement lors du build.
-- Les dépendances binaires (DLLs, .pyd) sont incluses pour garantir la portabilité sous Windows.
-- Pour toute modification, il est conseillé de travailler sur les scripts sources puis de régénérer les builds.
+1. **Backend :**  
+   a. Créez un environnement virtuel Python :  
+      ```bash
+      cd backend/
+      python -m venv .venv
+      ```
+   b. Activez l'environnement virtuel :  
+      - **Windows :**  
+        ```bash
+        .venv\Scripts\activate
+        ```
+      - **Linux/macOS :**  
+        ```bash
+        source .venv/bin/activate
+        ```
+   c. Installez les dépendances :  
+      ```bash
+      python -m pip install -r requirements.txt
+      ```
+2. **Extension :** Charger `extension/source/` en mode développeur
+3. **Tests :** `cd tests/ && test_all.bat`
 
 ---
 
-## Auteur
-
-Ce projet est maintenu par l'équipe SyncMarks.
-
+**Version :** 2.1 Multi-Browser  
+**Licence :** MIT  
+**Auteur :** Équipe SyncMark

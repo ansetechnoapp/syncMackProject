@@ -1,0 +1,9 @@
+{
+    "name": "com.syncmark.host",
+    "description": "Native messaging host for SyncMark",
+    "path": "C:\\laragon\\www\\syncMackProject\\backend\\service.py",
+    "type": "stdio",
+    "allowed_origins": [
+        "chrome-extension://omjaofhidckniiggbpaapnpaioejfaof/"
+    ]
+}
