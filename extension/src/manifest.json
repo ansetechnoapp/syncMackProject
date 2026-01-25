@@ -2,6 +2,7 @@
   "manifest_version": 3,
   "name": "SyncMark",
   "version": "2.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqzrh3E9OjOrQrpFXYBIH1O1djQ7pw1gmm9wOiYGwVL1aeyA1/bEG2IQ74pP3Q174GdQrD5BRgxx15VGoxBsbD1qeyrkSG/ieZ92vcvELVoBtHI0DHzKHaMdg7dpKxaQq8FxR4UCzQm7ataocoDKaT7BhWyRkoIYbj+Z1zTim3I9yOqJQ4XLjFc01p6+XFegWEHmQXAiyFluD4O6yTnVxp4xi+Hdlwg0ALCoVnXgDtzCLXdu/ng5fKPSaXh5b+xDD/J3N6Ut0FZD0RMqBhmJS/np/iiUhZB3bj7GDiQhLqr/8pn7MX8gmOvzdXAHTQxTdNKB/rBcKsRe0LaaoApMSUwIDAQAB",
   "description": "Synchronisez vos favoris via un programme compagnon local.",
   "permissions": [
     "bookmarks",

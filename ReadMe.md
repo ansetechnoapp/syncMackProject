@@ -1,59 +1,91 @@
-# SyncMark - Extension Multi-Navigateurs (Rust Backend)
+# SyncMark
 
-Synchronisez vos favoris entre tous vos navigateurs (Chrome, Edge, Firefox, Opera, Brave, Vivaldi) avec un backend performant en **Rust**.
+Application de synchronisation de favoris entre navigateurs via une application desktop locale.
 
-## 🚀 Installation Rapide
+## Produits
 
-### macOS / Linux
+### 1. Application Desktop
+
+Application Tauri + React pour gérer et synchroniser les favoris.
+
+**Fonctionnalités :**
+- Dashboard avec statistiques
+- Liste des favoris synchronisés
+- Configuration (intervalle, backup, etc.)
+- Serveur WebSocket pour communication temps réel
+- Surveillance des fichiers pour changements externes
+
+**Lancer en développement :**
 ```bash
-./scripts/install.sh
+cd desktop
+bun install
+bun run tauri dev
 ```
 
-### Windows
-```cmd
-cd scripts/
-install.bat
+**Build production :**
+```bash
+cd desktop
+bun run tauri build
 ```
 
-> **Note :** Le backend a été migré de Python vers Rust pour de meilleures performances et une consommation mémoire réduite.
+### 2. Extension Chrome
 
-## 📁 Structure du Projet
+Extension Manifest V3 pour synchroniser les favoris du navigateur.
 
-- **`backend_rust/`** - Nouveau backend haute performance en Rust
-- **`extension/`** - Code source de l'extension Web (Manifest V3)
-- **`scripts/`** - Scripts d'installation et de maintenance
-- **`docs/`** - Documentation complète
+**Fonctionnalités :**
+- Synchronisation manuelle via bouton
+- Synchronisation automatique en temps réel
+- Indicateur de connexion au desktop
+- Fallback Native Messaging si desktop fermé
 
-## 🌐 Navigateurs Supportés
+**Installation :**
+1. Ouvrir `chrome://extensions/`
+2. Activer "Mode développeur"
+3. "Charger l'extension non empaquetée"
+4. Sélectionner le dossier `extension/src/`
 
-- ✅ Google Chrome
-- ✅ Microsoft Edge
-- ✅ Mozilla Firefox
-- ✅ Opera
-- ✅ Brave Browser  
-- ✅ Vivaldi
-- ✅ Autres navigateurs Chromium
+## Architecture
 
-## � Développement
+```
+Desktop App (Tauri)          Extension Chrome
+      │                            │
+      │◄──── WebSocket ────────────┤
+      │      (port 9876)           │
+      │                            │
+      ▼                            │
+~/Documents/SyncMark/              │
+├── config.json                    │
+└── syncmark_bookmarks.json        │
+```
 
-### Prérequis
-- **Rust** (installé via [rustup](https://rustup.rs/))
-- **Python 3** (uniquement pour les scripts d'installation)
+## Structure
 
-### Compiler le Backend (Rust)
+```
+syncMackProject/
+├── desktop/           # Application Tauri + React
+│   ├── src/           # Frontend React
+│   └── src-tauri/     # Backend Rust
+├── extension/src/     # Extension Chrome
+├── backend_rust/      # Native Messaging (fallback)
+├── CLAUDE.md          # Instructions développement
+└── ReadMe.md
+```
+
+## Configuration Native Messaging (optionnel)
+
+Pour utiliser le fallback Native Messaging quand l'application desktop est fermée :
+
 ```bash
-cd backend_rust/
+# Compiler le backend
+cd backend_rust
 cargo build --release
-```
 
-### Installer l'extension
-1. Ouvrez `chrome://extensions` (ou équivalent)
-2. Activez le "Mode développeur"
-3. Cliquez sur "Charger l'extension non empaquetée"
-4. Sélectionnez le dossier `extension/src`
+# Copier le manifest (Linux/Chrome)
+mkdir -p ~/.config/google-chrome/NativeMessagingHosts
+cp com.syncmark.host.json ~/.config/google-chrome/NativeMessagingHosts/
+```
 
 ---
 
-**Version :** 3.0 (Rust Edition)
-**Licence :** MIT  
-**Auteur :** Équipe SyncMark
+**Version :** 4.0 (Tauri Edition)
+**Licence :** MIT

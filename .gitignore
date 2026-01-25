@@ -1,6 +1,14 @@
 # macOS
 .DS_Store
 
+# Node.js
+node_modules/
+dist/
+bun.lock
+bun.lockb
+package-lock.json
+yarn.lock
+
 # Python
 __pycache__/
 **/__pycache__/
@@ -12,13 +20,17 @@ logs/
 *.log
 
 # Rust build artifacts
+target/
 backend_rust/target/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
 .cargo_home/
 
 # Local native host manifest (machine-specific path)
 com.syncmark.host.json
 
 # Environment variables
+.env
 config/.env
 
 # Extension build outputs
@@ -27,4 +39,7 @@ extension/builds/
 # IDE settings
 .idea/
 .vscode/
+
+# Claude Code
+.claude/
 

@@ -1,0 +1,36 @@
+[package]
+name = "syncmark-desktop"
+version = "1.0.0"
+description = "SyncMark Desktop - Application de synchronisation de favoris"
+authors = ["SyncMark Team"]
+edition = "2021"
+
+[lib]
+name = "syncmark_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+notify = "6.0"
+directories = "5.0"
+chrono = { version = "0.4", features = ["serde"] }
+log = "0.4"
+env_logger = "0.11"
+parking_lot = "0.12"
+uuid = { version = "1.0", features = ["v4"] }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

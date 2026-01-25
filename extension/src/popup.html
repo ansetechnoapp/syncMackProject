@@ -11,13 +11,18 @@
         <p>Synchronisation automatique locale</p>
     </div>
 
+    <div class="connection-status">
+        <span id="connectionDot" class="status-dot disconnected"></span>
+        <span id="connectionText">Vérification...</span>
+    </div>
+
     <div class="actions">
         <button id="syncBtn">
             <span id="btnText">Synchroniser</span>
             <div id="loader" class="loader hidden"></div>
         </button>
     </div>
-    
+
     <div id="status">
         Prêt à synchroniser.
     </div>
@@ -25,4 +30,3 @@
     <script src="popup.js"></script>
 </body>
 </html>
-

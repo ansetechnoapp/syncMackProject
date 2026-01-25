@@ -1,9 +1,9 @@
 {
   "name": "com.syncmark.host",
   "description": "SyncMark Native Host (Rust)",
-  "path": "/Users/kevin/Projects/syncMackProject/backend_rust/target/release/backend_rust",
+  "path": "/home/kevin/Project/syncMackProject/backend_rust/target/release/backend_rust",
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://jcafeienjkpkpmhkdhhahmmhngaiahcc/"
+    "chrome-extension://ibjigboohcdglhcjncjpeoiojebkkbce/"
   ]
 }

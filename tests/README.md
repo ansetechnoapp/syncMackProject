@@ -1,3 +1,0 @@
-# Tests
-
-Tests et diagnostics
