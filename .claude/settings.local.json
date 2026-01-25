@@ -12,7 +12,8 @@
       "Bash(sudo chmod:*)",
       "Bash(/Users/kevin/Projects/syncMackProject/backend_rust/backend_wrapper.sh:*)",
       "Bash(cargo check:*)",
-      "Bash(bun run tsc:*)"
+      "Bash(bun run tsc:*)",
+      "Bash(bun run tauri dev:*)"
     ]
   }
 }

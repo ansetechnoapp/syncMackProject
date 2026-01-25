@@ -7,6 +7,7 @@ let isWebSocketConnected = false;
 let reconnectTimeout = null;
 let pendingResponses = new Map();
 let messageId = 0;
+let isUpdatingFromDesktop = false; // Flag pour éviter les boucles infinies
 
 // ==================== WebSocket Communication ====================
 
@@ -116,13 +117,36 @@ function handleWebSocketMessage(message) {
       break;
 
     case "bookmarks_updated":
-      // Bookmarks were updated from another source
+      // Bookmarks were updated from desktop app
       console.log("Favoris mis à jour depuis le desktop");
-      // Optionally trigger a refresh in the browser
+      if (message.payload && message.payload.bookmarks) {
+        updateBookmarksFromNative(message.payload.bookmarks).catch(e => {
+          console.error("Erreur mise à jour favoris depuis desktop:", e);
+        });
+      }
       break;
 
     case "config_updated":
       console.log("Configuration mise à jour:", message.payload);
+      break;
+
+    case "folders_updated":
+      // Folders were updated from desktop app
+      console.log("Dossiers mis à jour depuis le desktop");
+      if (message.payload && message.payload.folders) {
+        updateFoldersFromNative(message.payload.folders).catch(e => {
+          console.error("Erreur mise à jour dossiers depuis desktop:", e);
+        });
+      }
+      break;
+
+    case "create_folder":
+      // Desktop requests the browser to create a folder and return the real Chrome ID.
+      if (message.payload) {
+        createFolderFromDesktop(message.payload).catch((e) => {
+          console.error("Erreur création dossier depuis desktop:", e);
+        });
+      }
       break;
 
     case "status":
@@ -131,6 +155,35 @@ function handleWebSocketMessage(message) {
 
     default:
       console.log("Message inconnu:", message.type);
+  }
+}
+
+async function createFolderFromDesktop(payload) {
+  const title = payload.title || "Nouveau dossier";
+  const parentId = payload.parentId || "1";
+  const tempId = payload.tempId;
+
+  isUpdatingFromDesktop = true;
+  try {
+    const created = await chrome.bookmarks.create({
+      parentId,
+      title,
+    });
+
+    if (isWebSocketConnected) {
+      sendWebSocketMessage({
+        type: "folder_created",
+        payload: {
+          id: created.id,
+          title: created.title,
+          parentId: created.parentId,
+          dateAdded: created.dateAdded,
+          tempId,
+        },
+      });
+    }
+  } finally {
+    isUpdatingFromDesktop = false;
   }
 }
 
@@ -213,40 +266,227 @@ async function performSync() {
   }
 }
 
-async function updateBookmarksFromNative(bookmarksTree) {
-  console.log("Mise à jour des favoris du navigateur...");
-  await clearAllBookmarks();
+async function updateBookmarksFromNative(bookmarksData) {
+  console.log("Mise à jour des favoris du navigateur...", bookmarksData);
+  isUpdatingFromDesktop = true; // Éviter les boucles
 
-  const rootNode = bookmarksTree[0];
-  if (rootNode && rootNode.children) {
-    const bookmarksBar = rootNode.children.find(n => n.id === "1");
-    const otherBookmarks = rootNode.children.find(n => n.id === "2");
+  try {
+    // Vérifier si c'est un arbre Chrome (avec children) ou une liste plate
+    const firstItem = bookmarksData[0];
 
-    if (bookmarksBar && bookmarksBar.children) {
-      await createBookmarksRecursive(bookmarksBar.children, "1");
+    if (firstItem && firstItem.children) {
+      // Format arbre Chrome : [{id: "0", children: [{id: "1", ...}, {id: "2", ...}]}]
+      console.log("Format détecté: arbre Chrome");
+      await clearAllBookmarks();
+      const rootNode = firstItem;
+      const bookmarksBar = rootNode.children.find(n => n.id === "1");
+      const otherBookmarks = rootNode.children.find(n => n.id === "2");
+
+      if (bookmarksBar && bookmarksBar.children) {
+        await createBookmarksRecursive(bookmarksBar.children, "1");
+      }
+      if (otherBookmarks && otherBookmarks.children) {
+        await createBookmarksRecursive(otherBookmarks.children, "2");
+      }
+    } else {
+      // Format liste plate : [{id, title, url}, ...]
+      // Faire une synchronisation intelligente au lieu de tout supprimer/recréer
+      console.log("Format détecté: liste plate, " + bookmarksData.length + " favoris");
+      await syncBookmarksIncrementally(bookmarksData);
     }
-    if (otherBookmarks && otherBookmarks.children) {
-      await createBookmarksRecursive(otherBookmarks.children, "2");
-    }
+    console.log("Mise à jour des favoris terminée.");
+  } finally {
+    isUpdatingFromDesktop = false;
   }
-  console.log("Mise à jour des favoris terminée.");
 }
 
-async function clearAllBookmarks() {
+// Synchronisation incrémentale : met à jour, ajoute ou supprime selon les différences
+// Utilise l'ID comme clé principale pour permettre les doublons d'URL
+async function syncBookmarksIncrementally(desktopBookmarks) {
+  // Récupérer tous les favoris du navigateur (barre de favoris + autres favoris + mobile)
   const tree = await chrome.bookmarks.getTree();
-  const promises = [];
-  const rootChildren = tree[0].children;
-  if (rootChildren) {
-    const bar = rootChildren.find(c => c.id === "1");
-    if (bar && bar.children) {
-      bar.children.forEach(node => promises.push(chrome.bookmarks.removeTree(node.id)));
+  // tree[0] est la racine qui contient "Bookmarks Bar", "Other Bookmarks", etc.
+  const currentBookmarks = flattenBookmarks(tree[0].children || []);
+
+  // Normalisation d'URL pour éviter les doublons dus aux slashs finaux
+  const normalizeUrl = (url) => {
+    try {
+      if (!url) return "";
+      // Enlever le slash final sauf si c'est juste "http://domain.com/" (racine)
+      return url.replace(/\/$/, "");
+    } catch {
+      return url;
     }
-    const other = rootChildren.find(c => c.id === "2");
-    if (other && other.children) {
-      other.children.forEach(node => promises.push(chrome.bookmarks.removeTree(node.id)));
+  };
+
+  // Créer des maps par ID pour identification stable
+  const currentById = new Map(currentBookmarks.map(b => [b.id, b]));
+  
+  // Pour les favoris desktop, on essaie d'abord l'ID, sinon l'URL
+  const desktopBookmarksMap = new Map();
+  for (const b of desktopBookmarks) {
+    if (b.url) {
+        desktopBookmarksMap.set(b.id, b);
     }
   }
-  await Promise.all(promises);
+
+  // 1. Mise à jour des existants (par ID)
+  for (const [id, existing] of currentById) {
+    if (desktopBookmarksMap.has(id)) {
+      const desktopBookmark = desktopBookmarksMap.get(id);
+      
+      // Update title/url
+      if (existing.title !== desktopBookmark.title || normalizeUrl(existing.url) !== normalizeUrl(desktopBookmark.url)) {
+        console.log("Mise à jour:", desktopBookmark.title);
+        await chrome.bookmarks.update(existing.id, {
+          title: desktopBookmark.title,
+          url: desktopBookmark.url
+        });
+      }
+
+      // Move parent
+      const desiredParentId = desktopBookmark.parentId || "1";
+      if (existing.parentId !== desiredParentId) {
+        let targetParentId = desiredParentId;
+        try {
+          await chrome.bookmarks.get(targetParentId);
+        } catch {
+          targetParentId = "1";
+        }
+        if (existing.parentId !== targetParentId) {
+            console.log("Déplacement:", desktopBookmark.title, "->", targetParentId);
+            await chrome.bookmarks.move(existing.id, { parentId: targetParentId });
+        }
+      }
+      
+      // Marquer comme traité
+      desktopBookmarksMap.delete(id);
+    } else {
+        // L'élément existe dans le navigateur mais plus dans le desktop -> suppression ?
+        // ATTENTION : Si on supprime par ID, on risque de supprimer des favoris créés localement
+        // qui n'ont pas encore été sync.
+        // Mais si on ne supprime pas, on perd la synchro de suppression.
+        // On va vérifier si l'URL existe ailleurs dans le desktop (cas d'un changement d'ID)
+        const urlExists = Array.from(desktopBookmarksMap.values()).some(b => normalizeUrl(b.url) === normalizeUrl(existing.url));
+        if (!urlExists) {
+             console.log("Suppression (non trouvé dans desktop):", existing.title);
+             await chrome.bookmarks.remove(existing.id);
+        }
+    }
+  }
+
+  // 2. Création des nouveaux (restant dans la map)
+  for (const desktopBookmark of desktopBookmarksMap.values()) {
+      console.log("Création:", desktopBookmark.title);
+      let targetParentId = desktopBookmark.parentId || "1";
+      try {
+        await chrome.bookmarks.get(targetParentId);
+      } catch {
+        targetParentId = "1";
+      }
+      
+      // Si on a un ID temporaire ou nouveau du desktop, on crée
+      // Le nouvel ID sera généré par Chrome.
+      // Idéalement on devrait renvoyer le nouvel ID au desktop, mais
+      // le desktop écoute "bookmark_created" donc ça devrait se faire via l'event listener.
+      await chrome.bookmarks.create({
+        parentId: targetParentId,
+        title: desktopBookmark.title || desktopBookmark.url,
+        url: desktopBookmark.url
+      });
+  }
+}
+
+// Aplatir l'arbre de favoris en liste
+function flattenBookmarks(nodes) {
+  const result = [];
+  for (const node of nodes) {
+    if (node.url) {
+      result.push(node);
+    }
+    if (node.children) {
+      result.push(...flattenBookmarks(node.children));
+    }
+  }
+  return result;
+}
+
+async function updateFoldersFromNative(desktopFolders) {
+  isUpdatingFromDesktop = true;
+  try {
+    const tree = await chrome.bookmarks.getTree();
+    const rootNodes = flattenFolders(tree[0].children || []);
+    const currentByTitleParent = new Map();
+
+    // Map existing folders by parentId + title (heuristic)
+    for (const folder of rootNodes) {
+      const key = `${folder.parentId}:${folder.title}`;
+      currentByTitleParent.set(key, folder);
+    }
+
+    const currentById = new Map(rootNodes.map(f => [f.id, f]));
+    const desktopById = new Map(desktopFolders.map(f => [f.id, f]));
+
+    // 1. Update or Create folders
+    for (const folder of desktopFolders) {
+      // Try to find by ID first (if synced previously)
+      let existing = currentById.get(folder.id);
+      
+      // If not found by ID, try finding by Title+Parent (legacy/unmapped)
+      if (!existing) {
+        const key = `${folder.parentId || "1"}:${folder.title}`;
+        existing = currentByTitleParent.get(key);
+      }
+
+      if (existing) {
+        // Update if title changed
+        if (existing.title !== folder.title) {
+          console.log("Renaming folder:", existing.title, "->", folder.title);
+          await chrome.bookmarks.update(existing.id, { title: folder.title });
+        }
+        // Move if parent changed
+        const desiredParent = folder.parentId || "1";
+        if (existing.parentId !== desiredParent && desiredParent !== "root") {
+           // Verify parent exists
+           try {
+             await chrome.bookmarks.get(desiredParent);
+             console.log("Moving folder:", existing.title, "->", desiredParent);
+             await chrome.bookmarks.move(existing.id, { parentId: desiredParent });
+           } catch {
+             // Parent not found, fallback to root or ignore
+           }
+        }
+      } else {
+        // Create new folder
+        // Note: For ID mapping to work, we rely on the `create_folder` flow for new folders.
+        // But for initial sync or missed events, we might create duplicates if we don't match.
+        // The desktop `create_folder` flow handles the creation-with-id-mapping.
+        // This loop handles updates/renames primarily.
+        // If we really need to create here, we can, but we won't get the ID back to desktop easily
+        // without a full sync.
+      }
+    }
+    
+    // 2. Remove folders that are gone from desktop?
+    // Dangerous if desktop state is partial. Better to rely on explicit `folder_removed`.
+    // We skip removal in this incremental folder sync for safety.
+    
+  } finally {
+    isUpdatingFromDesktop = false;
+  }
+}
+
+function flattenFolders(nodes) {
+  const result = [];
+  for (const node of nodes) {
+    if (!node.url && node.children) { // It's a folder
+      if (node.id !== "0") { // Skip root
+        result.push(node);
+      }
+      result.push(...flattenFolders(node.children));
+    }
+  }
+  return result;
 }
 
 async function createBookmarksRecursive(nodes, parentId) {
@@ -276,11 +516,15 @@ function debounceBookmarkChange(callback, delay = 1000) {
 }
 
 chrome.bookmarks.onCreated.addListener((id, bookmark) => {
-  console.log("Favori créé:", bookmark.title);
+  if (isUpdatingFromDesktop) return; // Ignorer si mise à jour depuis desktop
+
+  // Distinguer dossier vs favori (un dossier n'a pas d'URL)
+  const isFolder = !bookmark.url;
+  console.log(isFolder ? "Dossier créé:" : "Favori créé:", bookmark.title);
 
   if (isWebSocketConnected) {
     sendWebSocketMessage({
-      type: "bookmark_created",
+      type: isFolder ? "folder_created" : "bookmark_created",
       payload: {
         id: bookmark.id,
         title: bookmark.title,
@@ -293,32 +537,47 @@ chrome.bookmarks.onCreated.addListener((id, bookmark) => {
 });
 
 chrome.bookmarks.onRemoved.addListener((id, removeInfo) => {
-  console.log("Favori supprimé:", id);
+  if (isUpdatingFromDesktop) return; // Ignorer si mise à jour depuis desktop
+
+  // removeInfo.node contient les infos du nœud supprimé
+  const isFolder = removeInfo.node && !removeInfo.node.url;
+  console.log(isFolder ? "Dossier supprimé:" : "Favori supprimé:", id);
 
   if (isWebSocketConnected) {
     sendWebSocketMessage({
-      type: "bookmark_removed",
+      type: isFolder ? "folder_removed" : "bookmark_removed",
       payload: { id }
     });
   }
 });
 
-chrome.bookmarks.onChanged.addListener((id, changeInfo) => {
-  console.log("Favori modifié:", id, changeInfo);
+chrome.bookmarks.onChanged.addListener(async (id, changeInfo) => {
+  if (isUpdatingFromDesktop) return; // Ignorer si mise à jour depuis desktop
 
   if (isWebSocketConnected) {
-    sendWebSocketMessage({
-      type: "bookmark_changed",
-      payload: {
-        id,
-        title: changeInfo.title,
-        url: changeInfo.url
-      }
-    });
+    // Récupérer les données complètes du favori/dossier
+    try {
+      const [bookmark] = await chrome.bookmarks.get(id);
+      const isFolder = !bookmark.url;
+      console.log(isFolder ? "Dossier modifié:" : "Favori modifié:", id, changeInfo);
+
+      sendWebSocketMessage({
+        type: isFolder ? "folder_changed" : "bookmark_changed",
+        payload: {
+          id,
+          title: bookmark.title,
+          url: bookmark.url,
+          parentId: bookmark.parentId
+        }
+      });
+    } catch (e) {
+      console.error("Erreur récupération favori/dossier:", e);
+    }
   }
 });
 
 chrome.bookmarks.onMoved.addListener((id, moveInfo) => {
+  if (isUpdatingFromDesktop) return; // Ignorer si mise à jour depuis desktop
   console.log("Favori déplacé:", id);
 
   // For moves, we do a full sync after debounce

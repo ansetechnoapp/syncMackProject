@@ -39,6 +39,31 @@ export interface BookmarkData {
   url?: string;
   parentId?: string;
   dateAdded?: number;
+  isFolder?: boolean;
+  children?: TreeNode[];
+}
+
+export interface FolderData {
+  id?: string;
+  title?: string;
+  parentId?: string;
+  dateAdded?: number;
+}
+
+export interface TreeNode {
+  id?: string;
+  title?: string;
+  url?: string;
+  parentId?: string;
+  dateAdded?: number;
+  isFolder?: boolean;
+  children?: TreeNode[];
+}
+
+export interface BookmarksTree {
+  items: TreeNode[];
+  total_bookmarks: number;
+  total_folders: number;
 }
 
 export interface BookmarksData {
@@ -111,4 +136,22 @@ export async function requestSyncFromExtensions(): Promise<void> {
 
 export async function getDataDirectory(): Promise<string> {
   return invokeWithTimeout<string>("get_data_directory");
+}
+
+// ==================== Fonctions pour les dossiers ====================
+
+export async function getBookmarksTree(): Promise<BookmarksTree> {
+  return invokeWithTimeout<BookmarksTree>("get_bookmarks_tree", undefined, 12000);
+}
+
+export async function addFolder(folder: FolderData): Promise<boolean> {
+  return invokeWithTimeout<boolean>("add_folder", { folder });
+}
+
+export async function removeFolder(folderId: string): Promise<boolean> {
+  return invokeWithTimeout<boolean>("remove_folder", { folderId });
+}
+
+export async function updateFolder(folderId: string, folder: FolderData): Promise<boolean> {
+  return invokeWithTimeout<boolean>("update_folder", { folderId, folder });
 }

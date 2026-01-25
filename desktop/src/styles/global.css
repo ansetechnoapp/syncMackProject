@@ -650,3 +650,151 @@ input:checked + .slider:before {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-secondary);
 }
+
+/* ==================== Tree View (Folders) ==================== */
+
+.search-bar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.search-bar .search-input {
+  flex: 1;
+}
+
+.bookmarks-tree {
+  list-style: none;
+  max-height: calc(100vh - 280px);
+  overflow-y: auto;
+  padding: 0;
+}
+
+.tree-node {
+  padding-left: calc(var(--depth, 0) * 20px);
+}
+
+.folder-node {
+  margin: 0;
+}
+
+.folder-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 15px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.2s;
+}
+
+.folder-header:hover {
+  background: var(--bg-input);
+}
+
+.folder-toggle {
+  width: 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+  user-select: none;
+}
+
+.folder-icon {
+  font-size: 18px;
+}
+
+.folder-title {
+  flex: 1;
+  font-weight: 500;
+}
+
+.folder-count {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.folder-children {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.bookmark-node {
+  margin: 0;
+}
+
+.bookmark-node .bookmark-item {
+  padding-left: calc(var(--depth, 0) * 20px + 15px);
+}
+
+.node-actions {
+  display: flex;
+  gap: 5px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.folder-header:hover .node-actions,
+.bookmark-item:hover .node-actions {
+  opacity: 1;
+}
+
+.btn-add {
+  font-weight: bold;
+  font-size: 16px;
+}
+
+.btn-add:hover {
+  background: rgba(39, 174, 96, 0.2);
+}
+
+/* Edit Forms */
+.edit-form {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 15px;
+  background: var(--bg-input);
+}
+
+.edit-form .edit-input {
+  flex: 1;
+  padding: 8px 12px;
+}
+
+.edit-actions {
+  display: flex;
+  gap: 5px;
+}
+
+.folder-edit {
+  padding-left: calc(var(--depth, 0) * 20px + 15px);
+}
+
+.new-folder-form {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 15px;
+  background: var(--bg-input);
+  border-bottom: 1px solid var(--border);
+}
+
+.new-folder-form .edit-input {
+  flex: 1;
+  padding: 8px 12px;
+}
+
+/* Bookmarks Meta avec dossiers */
+.bookmarks-meta {
+  gap: 8px;
+}
+
+.bookmarks-meta span {
+  background: var(--bg-input);
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+}

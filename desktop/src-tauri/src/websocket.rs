@@ -156,15 +156,30 @@ fn process_client_message(
                 if let Some(bookmarks) = payload.get("bookmarks").and_then(|v| v.as_array()) {
                     state.set_sync_in_progress(true);
 
-                    let (merged, success, bookmarks_data) = {
+                    let (incoming_bookmarks, incoming_folders) = if bookmarks
+                        .first()
+                        .and_then(|b| b.get("children"))
+                        .is_some()
+                    {
+                        BookmarksManager::flatten_chrome_tree(bookmarks)
+                    } else {
+                        (bookmarks.clone(), Vec::new())
+                    };
+
+                    let (merged, folders_merged, success, bookmarks_data) = {
                         let mut local_bookmarks = state.bookmarks.write();
                         let merged = BookmarksManager::merge_bookmarks(
                             &mut local_bookmarks,
-                            bookmarks.clone(),
+                            incoming_bookmarks,
                         );
+                        let folders_merged = if incoming_folders.is_empty() {
+                            local_bookmarks.folders.clone()
+                        } else {
+                            BookmarksManager::merge_folders(&mut local_bookmarks, incoming_folders)
+                        };
                         let success = BookmarksManager::save_bookmarks(&mut local_bookmarks);
                         let data = local_bookmarks.clone();
-                        (merged, success, data)
+                        (merged, folders_merged, success, data)
                     };
 
                     state.update_sync_complete(
@@ -179,6 +194,14 @@ fn process_client_message(
                     });
                     state.broadcast_message(&broadcast.to_string());
 
+                    if !folders_merged.is_empty() {
+                        let folders_broadcast = json!({
+                            "type": "folders_updated",
+                            "payload": { "folders": &folders_merged }
+                        });
+                        state.broadcast_message(&folders_broadcast.to_string());
+                    }
+
                     // Émettre vers le frontend React
                     state.emit_to_frontend("bookmarks_updated", &bookmarks_data);
 
@@ -188,7 +211,8 @@ fn process_client_message(
                         "type": "sync_complete",
                         "payload": {
                             "success": success,
-                            "bookmarks": merged
+                            "bookmarks": merged,
+                            "folders": folders_merged
                         }
                     }).to_string());
                 }
@@ -283,6 +307,97 @@ fn process_client_message(
                         client.browser = browser.to_string();
                     }
                     info!("Client {} identified as {}", client_id, browser);
+                }
+            }
+            None
+        }
+
+        // ==================== Gestion des dossiers ====================
+
+        "folder_created" => {
+            if let Some(payload) = message.get("payload") {
+                let result = {
+                    let mut bookmarks = state.bookmarks.write();
+
+                    // If this folder comes from a desktop-initiated creation,
+                    // the extension will provide a tempId to map to the real Chrome id.
+                    if let (Some(temp_id), Some(real_id)) = (
+                        payload.get("tempId").and_then(|v| v.as_str()),
+                        payload.get("id").and_then(|v| v.as_str()),
+                    ) {
+                        if BookmarksManager::remap_folder_id(&mut bookmarks, temp_id, real_id) {
+                            info!("Folder created (mapped) from {}: {} -> {}", client_id, temp_id, real_id);
+                            Some((bookmarks.folders.clone(), bookmarks.clone()))
+                        } else {
+                            None
+                        }
+                    } else if BookmarksManager::add_folder(&mut bookmarks, payload.clone()) {
+                        info!("Folder created from {}", client_id);
+                        Some((bookmarks.folders.clone(), bookmarks.clone()))
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some((folders, data)) = result {
+                    let broadcast = json!({
+                        "type": "folders_updated",
+                        "payload": { "folders": folders }
+                    });
+                    state.broadcast_message(&broadcast.to_string());
+                    state.emit_to_frontend("bookmarks_updated", &data);
+                }
+            }
+            None
+        }
+
+        "folder_removed" => {
+            if let Some(payload) = message.get("payload") {
+                if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
+                    let result = {
+                        let mut bookmarks = state.bookmarks.write();
+                        if BookmarksManager::remove_folder(&mut bookmarks, id) {
+                            info!("Folder removed from {}: {}", client_id, id);
+                            Some((bookmarks.folders.clone(), bookmarks.clone()))
+                        } else {
+                            None
+                        }
+                    };
+
+                    if let Some((folders, data)) = result {
+                        let broadcast = json!({
+                            "type": "folders_updated",
+                            "payload": { "folders": folders }
+                        });
+                        state.broadcast_message(&broadcast.to_string());
+                        state.emit_to_frontend("bookmarks_updated", &data);
+                    }
+                }
+            }
+            None
+        }
+
+        "folder_changed" => {
+            if let Some(payload) = message.get("payload") {
+                if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
+                    let result = {
+                        let mut bookmarks = state.bookmarks.write();
+                        if BookmarksManager::update_folder(&mut bookmarks, id, payload.clone()) {
+                            info!("Folder updated from {}: {}", client_id, id);
+                            Some((bookmarks.folders.clone(), bookmarks.clone()))
+                        } else {
+                            None
+                        }
+                    };
+
+                    if let Some((folders, data)) = result {
+                        let broadcast = json!({
+                            "type": "folders_updated",
+                            "payload": { "folders": folders }
+                        });
+                        state.broadcast_message(&broadcast.to_string());
+                        state.emit_to_frontend("bookmarks_updated", &data);
+                    }
                 }
             }
             None

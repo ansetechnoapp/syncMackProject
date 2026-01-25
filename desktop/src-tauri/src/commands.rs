@@ -3,6 +3,7 @@ use serde_json::{json, Value};
 use crate::state::{SharedState, SyncStatus, ConnectedClient};
 use crate::config::{Config, ConfigManager};
 use crate::bookmarks::{BookmarksData, BookmarksManager};
+use uuid::Uuid;
 
 #[tauri::command]
 pub fn get_config(state: State<SharedState>) -> Config {
@@ -35,7 +36,21 @@ pub fn sync_bookmarks(state: State<SharedState>, extension_bookmarks: Vec<Value>
     state.set_sync_in_progress(true);
 
     let mut bookmarks = state.bookmarks.write();
-    let merged = BookmarksManager::merge_bookmarks(&mut bookmarks, extension_bookmarks);
+
+    let (incoming_bookmarks, incoming_folders) = if extension_bookmarks
+        .first()
+        .and_then(|b| b.get("children"))
+        .is_some()
+    {
+        BookmarksManager::flatten_chrome_tree(&extension_bookmarks)
+    } else {
+        (extension_bookmarks, Vec::new())
+    };
+
+    let merged = BookmarksManager::merge_bookmarks(&mut bookmarks, incoming_bookmarks);
+    if !incoming_folders.is_empty() {
+        BookmarksManager::merge_folders(&mut bookmarks, incoming_folders);
+    }
 
     let success = BookmarksManager::save_bookmarks(&mut bookmarks);
     let bookmarks_data = bookmarks.clone();
@@ -145,4 +160,105 @@ pub fn request_sync_from_extensions(state: State<SharedState>) {
 #[tauri::command]
 pub fn get_data_directory() -> String {
     ConfigManager::get_sync_dir().to_string_lossy().to_string()
+}
+
+// ==================== Commandes pour les dossiers ====================
+
+#[tauri::command]
+pub fn get_bookmarks_tree(state: State<SharedState>) -> Value {
+    let bookmarks = state.bookmarks.read();
+    BookmarksManager::build_tree(&bookmarks)
+}
+
+#[tauri::command]
+pub fn add_folder(state: State<SharedState>, folder: Value) -> bool {
+    let mut folder_obj = folder.as_object().cloned().unwrap_or_default();
+
+    // Desktop-created folders need a temporary ID so the extension can create the folder
+    // in Chrome and send back the real Chrome folder ID.
+    let temp_id = folder_obj
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    folder_obj.insert("id".to_string(), Value::String(temp_id.clone()));
+
+    let parent_id = folder_obj
+        .get("parentId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("1")
+        .to_string();
+    folder_obj.insert("parentId".to_string(), Value::String(parent_id.clone()));
+
+    let mut bookmarks = state.bookmarks.write();
+    let result = BookmarksManager::add_folder(&mut bookmarks, Value::Object(folder_obj));
+
+    if result {
+        let bookmarks_data = bookmarks.clone();
+        let message = json!({
+            "type": "folders_updated",
+            "payload": {
+                "folders": bookmarks.folders
+            }
+        }).to_string();
+        drop(bookmarks);
+        state.broadcast_message(&message);
+        state.emit_to_frontend("bookmarks_updated", &bookmarks_data);
+
+        // Ask extensions to create the folder in the browser.
+        // The extension will respond with `folder_created` containing `tempId` + real Chrome `id`.
+        let create_folder = json!({
+            "type": "create_folder",
+            "payload": {
+                "tempId": temp_id,
+                "title": folder.get("title").cloned().unwrap_or(Value::Null),
+                "parentId": parent_id
+            }
+        }).to_string();
+        state.broadcast_message(&create_folder);
+    }
+
+    result
+}
+
+#[tauri::command]
+pub fn remove_folder(state: State<SharedState>, folder_id: String) -> bool {
+    let mut bookmarks = state.bookmarks.write();
+    let result = BookmarksManager::remove_folder(&mut bookmarks, &folder_id);
+
+    if result {
+        let bookmarks_data = bookmarks.clone();
+        let message = json!({
+            "type": "folders_updated",
+            "payload": {
+                "folders": bookmarks.folders
+            }
+        }).to_string();
+        drop(bookmarks);
+        state.broadcast_message(&message);
+        state.emit_to_frontend("bookmarks_updated", &bookmarks_data);
+    }
+
+    result
+}
+
+#[tauri::command]
+pub fn update_folder(state: State<SharedState>, folder_id: String, folder: Value) -> bool {
+    let mut bookmarks = state.bookmarks.write();
+    let result = BookmarksManager::update_folder(&mut bookmarks, &folder_id, folder);
+
+    if result {
+        let bookmarks_data = bookmarks.clone();
+        let message = json!({
+            "type": "folders_updated",
+            "payload": {
+                "folders": bookmarks.folders
+            }
+        }).to_string();
+        drop(bookmarks);
+        state.broadcast_message(&message);
+        state.emit_to_frontend("bookmarks_updated", &bookmarks_data);
+    }
+
+    result
 }
