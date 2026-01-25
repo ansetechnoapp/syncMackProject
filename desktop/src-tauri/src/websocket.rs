@@ -156,14 +156,15 @@ fn process_client_message(
                 if let Some(bookmarks) = payload.get("bookmarks").and_then(|v| v.as_array()) {
                     state.set_sync_in_progress(true);
 
-                    let (merged, success) = {
+                    let (merged, success, bookmarks_data) = {
                         let mut local_bookmarks = state.bookmarks.write();
                         let merged = BookmarksManager::merge_bookmarks(
                             &mut local_bookmarks,
                             bookmarks.clone(),
                         );
                         let success = BookmarksManager::save_bookmarks(&mut local_bookmarks);
-                        (merged, success)
+                        let data = local_bookmarks.clone();
+                        (merged, success, data)
                     };
 
                     state.update_sync_complete(
@@ -171,12 +172,15 @@ fn process_client_message(
                         if success { None } else { Some("Failed to save".to_string()) },
                     );
 
-                    // Broadcast to other clients
+                    // Broadcast to other clients (extensions)
                     let broadcast = json!({
                         "type": "bookmarks_updated",
                         "payload": { "bookmarks": &merged }
                     });
                     state.broadcast_message(&broadcast.to_string());
+
+                    // Émettre vers le frontend React
+                    state.emit_to_frontend("bookmarks_updated", &bookmarks_data);
 
                     info!("Sync completed from {}: {} bookmarks", client_id, merged.len());
 
@@ -194,22 +198,24 @@ fn process_client_message(
 
         "bookmark_created" => {
             if let Some(payload) = message.get("payload") {
-                let bookmarks_list = {
+                let result = {
                     let mut bookmarks = state.bookmarks.write();
                     if BookmarksManager::add_bookmark(&mut bookmarks, payload.clone()) {
                         info!("Bookmark created from {}", client_id);
-                        Some(bookmarks.bookmarks.clone())
+                        Some((bookmarks.bookmarks.clone(), bookmarks.clone()))
                     } else {
                         None
                     }
                 };
 
-                if let Some(list) = bookmarks_list {
+                if let Some((list, data)) = result {
                     let broadcast = json!({
                         "type": "bookmarks_updated",
                         "payload": { "bookmarks": list }
                     });
                     state.broadcast_message(&broadcast.to_string());
+                    // Émettre vers le frontend React
+                    state.emit_to_frontend("bookmarks_updated", &data);
                 }
             }
             None
@@ -218,22 +224,24 @@ fn process_client_message(
         "bookmark_removed" => {
             if let Some(payload) = message.get("payload") {
                 if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
-                    let bookmarks_list = {
+                    let result = {
                         let mut bookmarks = state.bookmarks.write();
                         if BookmarksManager::remove_bookmark(&mut bookmarks, id) {
                             info!("Bookmark removed from {}: {}", client_id, id);
-                            Some(bookmarks.bookmarks.clone())
+                            Some((bookmarks.bookmarks.clone(), bookmarks.clone()))
                         } else {
                             None
                         }
                     };
 
-                    if let Some(list) = bookmarks_list {
+                    if let Some((list, data)) = result {
                         let broadcast = json!({
                             "type": "bookmarks_updated",
                             "payload": { "bookmarks": list }
                         });
                         state.broadcast_message(&broadcast.to_string());
+                        // Émettre vers le frontend React
+                        state.emit_to_frontend("bookmarks_updated", &data);
                     }
                 }
             }
@@ -243,22 +251,24 @@ fn process_client_message(
         "bookmark_changed" => {
             if let Some(payload) = message.get("payload") {
                 if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
-                    let bookmarks_list = {
+                    let result = {
                         let mut bookmarks = state.bookmarks.write();
                         if BookmarksManager::update_bookmark(&mut bookmarks, id, payload.clone()) {
                             info!("Bookmark updated from {}: {}", client_id, id);
-                            Some(bookmarks.bookmarks.clone())
+                            Some((bookmarks.bookmarks.clone(), bookmarks.clone()))
                         } else {
                             None
                         }
                     };
 
-                    if let Some(list) = bookmarks_list {
+                    if let Some((list, data)) = result {
                         let broadcast = json!({
                             "type": "bookmarks_updated",
                             "payload": { "bookmarks": list }
                         });
                         state.broadcast_message(&broadcast.to_string());
+                        // Émettre vers le frontend React
+                        state.emit_to_frontend("bookmarks_updated", &data);
                     }
                 }
             }

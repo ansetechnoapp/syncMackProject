@@ -322,6 +322,24 @@ body {
   background: rgba(231, 76, 60, 0.2);
 }
 
+.btn-edit:hover {
+  background: rgba(52, 152, 219, 0.2);
+}
+
+.btn-small {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.btn-secondary {
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.btn-secondary:hover {
+  background: var(--border);
+}
+
 /* Settings */
 .settings-section {
   background: var(--bg-card);
@@ -574,6 +592,45 @@ input:checked + .slider:before {
 .bookmark-actions {
   display: flex;
   gap: 5px;
+}
+
+/* Bookmark Edit Form */
+.bookmark-edit-form {
+  background: var(--bg-input);
+}
+
+.bookmark-edit-form form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.edit-form-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.edit-input {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.edit-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.edit-form-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 /* Scrollbar */

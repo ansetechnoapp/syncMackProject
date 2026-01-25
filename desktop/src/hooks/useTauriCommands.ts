@@ -93,6 +93,10 @@ export async function removeBookmark(bookmarkId: string): Promise<boolean> {
   return invokeWithTimeout<boolean>("remove_bookmark", { bookmarkId });
 }
 
+export async function updateBookmark(bookmarkId: string, bookmark: BookmarkData): Promise<boolean> {
+  return invokeWithTimeout<boolean>("update_bookmark", { bookmarkId, bookmark });
+}
+
 export async function getSyncStatus(): Promise<SyncStatus> {
   return invokeWithTimeout<SyncStatus>("get_sync_status");
 }

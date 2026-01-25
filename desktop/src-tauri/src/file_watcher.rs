@@ -74,11 +74,13 @@ async fn handle_bookmarks_change(state: &SharedState) {
     *state.bookmarks.write() = new_bookmarks.clone();
 
     // Update sync status
-    let mut status = state.sync_status.write();
-    status.total_bookmarks = new_bookmarks.bookmarks.len();
-    drop(status);
+    let status_clone = {
+        let mut status = state.sync_status.write();
+        status.total_bookmarks = new_bookmarks.bookmarks.len();
+        status.clone()
+    };
 
-    // Broadcast to connected clients
+    // Broadcast to connected clients (extensions)
     let message = json!({
         "type": "bookmarks_updated",
         "payload": {
@@ -87,6 +89,10 @@ async fn handle_bookmarks_change(state: &SharedState) {
         }
     });
     state.broadcast_message(&message.to_string());
+
+    // Émettre vers le frontend React
+    state.emit_to_frontend("bookmarks_updated", &new_bookmarks);
+    state.emit_to_frontend("sync_status_updated", &status_clone);
 }
 
 async fn handle_config_change(state: &SharedState) {
@@ -98,10 +104,13 @@ async fn handle_config_change(state: &SharedState) {
     // Update state
     *state.config.write() = new_config.clone();
 
-    // Broadcast to connected clients
+    // Broadcast to connected clients (extensions)
     let message = json!({
         "type": "config_updated",
         "payload": new_config
     });
     state.broadcast_message(&message.to_string());
+
+    // Émettre vers le frontend React
+    state.emit_to_frontend("config_updated", &new_config);
 }

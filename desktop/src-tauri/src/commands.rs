@@ -38,11 +38,12 @@ pub fn sync_bookmarks(state: State<SharedState>, extension_bookmarks: Vec<Value>
     let merged = BookmarksManager::merge_bookmarks(&mut bookmarks, extension_bookmarks);
 
     let success = BookmarksManager::save_bookmarks(&mut bookmarks);
+    let bookmarks_data = bookmarks.clone();
     drop(bookmarks);
 
     state.update_sync_complete(success, if success { None } else { Some("Failed to save bookmarks".to_string()) });
 
-    // Broadcast update to all connected clients
+    // Broadcast update to all connected clients (extensions)
     let message = json!({
         "type": "bookmarks_updated",
         "payload": {
@@ -50,6 +51,9 @@ pub fn sync_bookmarks(state: State<SharedState>, extension_bookmarks: Vec<Value>
         }
     }).to_string();
     state.broadcast_message(&message);
+
+    // Émettre vers le frontend React
+    state.emit_to_frontend("bookmarks_updated", &bookmarks_data);
 
     merged
 }
@@ -60,13 +64,17 @@ pub fn add_bookmark(state: State<SharedState>, bookmark: Value) -> bool {
     let result = BookmarksManager::add_bookmark(&mut bookmarks, bookmark);
 
     if result {
+        let bookmarks_data = bookmarks.clone();
         let message = json!({
             "type": "bookmarks_updated",
             "payload": {
                 "bookmarks": bookmarks.bookmarks
             }
         }).to_string();
+        drop(bookmarks);
         state.broadcast_message(&message);
+        // Émettre vers le frontend React
+        state.emit_to_frontend("bookmarks_updated", &bookmarks_data);
     }
 
     result
@@ -78,13 +86,39 @@ pub fn remove_bookmark(state: State<SharedState>, bookmark_id: String) -> bool {
     let result = BookmarksManager::remove_bookmark(&mut bookmarks, &bookmark_id);
 
     if result {
+        let bookmarks_data = bookmarks.clone();
         let message = json!({
             "type": "bookmarks_updated",
             "payload": {
                 "bookmarks": bookmarks.bookmarks
             }
         }).to_string();
+        drop(bookmarks);
         state.broadcast_message(&message);
+        // Émettre vers le frontend React
+        state.emit_to_frontend("bookmarks_updated", &bookmarks_data);
+    }
+
+    result
+}
+
+#[tauri::command]
+pub fn update_bookmark(state: State<SharedState>, bookmark_id: String, bookmark: Value) -> bool {
+    let mut bookmarks = state.bookmarks.write();
+    let result = BookmarksManager::update_bookmark(&mut bookmarks, &bookmark_id, bookmark);
+
+    if result {
+        let bookmarks_data = bookmarks.clone();
+        let message = json!({
+            "type": "bookmarks_updated",
+            "payload": {
+                "bookmarks": bookmarks.bookmarks
+            }
+        }).to_string();
+        drop(bookmarks);
+        state.broadcast_message(&message);
+        // Émettre vers le frontend React
+        state.emit_to_frontend("bookmarks_updated", &bookmarks_data);
     }
 
     result

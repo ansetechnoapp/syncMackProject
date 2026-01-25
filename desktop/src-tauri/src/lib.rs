@@ -38,6 +38,7 @@ pub fn run() {
             sync_bookmarks,
             add_bookmark,
             remove_bookmark,
+            update_bookmark,
             get_sync_status,
             get_connected_clients,
             request_sync_from_extensions,

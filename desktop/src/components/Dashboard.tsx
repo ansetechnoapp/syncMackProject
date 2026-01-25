@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   getSyncStatus,
   getConnectedClients,
@@ -6,6 +6,7 @@ import {
   type SyncStatus,
   type ConnectedClient,
 } from "../hooks/useTauriCommands";
+import { useSyncStatusUpdated, useClientsUpdated } from "../hooks/useRealtimeEvents";
 import ConnectionIndicator from "./ConnectionIndicator";
 import SyncStatusComponent from "./SyncStatus";
 
@@ -13,31 +14,40 @@ function Dashboard() {
   const [status, setStatus] = useState<SyncStatus | null>(null);
   const [clients, setClients] = useState<ConnectedClient[]>([]);
   const [loading, setLoading] = useState(true);
-  const fetchInProgress = useRef(false);
 
-  const fetchData = async () => {
-    if (fetchInProgress.current) return;
-    fetchInProgress.current = true;
-    try {
-      const [syncStatus, connectedClients] = await Promise.all([
-        getSyncStatus(),
-        getConnectedClients(),
-      ]);
-      setStatus(syncStatus);
-      setClients(connectedClients);
-    } catch (error) {
-      console.error("Failed to fetch dashboard data:", error);
-    } finally {
-      setLoading(false);
-      fetchInProgress.current = false;
-    }
-  };
-
+  // Charger les données initiales
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 2000);
-    return () => clearInterval(interval);
+    const fetchInitialData = async () => {
+      try {
+        const [syncStatus, connectedClients] = await Promise.all([
+          getSyncStatus(),
+          getConnectedClients(),
+        ]);
+        setStatus(syncStatus);
+        setClients(connectedClients);
+      } catch (error) {
+        console.error("Failed to fetch dashboard data:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchInitialData();
   }, []);
+
+  // Écouter les mises à jour du statut en temps réel
+  const handleSyncStatusUpdate = useCallback((newStatus: SyncStatus) => {
+    setStatus(newStatus);
+  }, []);
+
+  useSyncStatusUpdated(handleSyncStatusUpdate);
+
+  // Écouter les mises à jour des clients en temps réel
+  const handleClientsUpdate = useCallback((newClients: ConnectedClient[]) => {
+    setClients(newClients);
+  }, []);
+
+  useClientsUpdated(handleClientsUpdate);
 
   const handleRequestSync = async () => {
     try {
