@@ -9,19 +9,27 @@ import {
 function Settings() {
   const [config, setConfig] = useState<Config | null>(null);
   const [dataDir, setDataDir] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  const loadData = async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const [cfg, dir] = await Promise.all([getConfig(), getDataDirectory()]);
+      setConfig(cfg);
+      setDataDir(dir);
+    } catch (error) {
+      console.error("Failed to load settings:", error);
+      setLoadError("Impossible de charger les paramètres");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const loadData = async () => {
-      try {
-        const [cfg, dir] = await Promise.all([getConfig(), getDataDirectory()]);
-        setConfig(cfg);
-        setDataDir(dir);
-      } catch (error) {
-        console.error("Failed to load settings:", error);
-      }
-    };
     loadData();
   }, []);
 
@@ -50,8 +58,30 @@ function Settings() {
     setConfig({ ...config, [key]: value });
   };
 
-  if (!config) {
+  if (loading) {
     return <div className="loading">Chargement des paramètres...</div>;
+  }
+
+  if (loadError) {
+    return (
+      <div className="loading">
+        <div>{loadError}</div>
+        <button className="btn btn-primary" onClick={loadData}>
+          Réessayer
+        </button>
+      </div>
+    );
+  }
+
+  if (!config) {
+    return (
+      <div className="loading">
+        <div>Paramètres indisponibles</div>
+        <button className="btn btn-primary" onClick={loadData}>
+          Réessayer
+        </button>
+      </div>
+    );
   }
 
   return (

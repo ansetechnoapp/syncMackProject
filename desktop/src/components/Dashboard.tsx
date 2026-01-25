@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   getSyncStatus,
   getConnectedClients,
@@ -13,8 +13,11 @@ function Dashboard() {
   const [status, setStatus] = useState<SyncStatus | null>(null);
   const [clients, setClients] = useState<ConnectedClient[]>([]);
   const [loading, setLoading] = useState(true);
+  const fetchInProgress = useRef(false);
 
   const fetchData = async () => {
+    if (fetchInProgress.current) return;
+    fetchInProgress.current = true;
     try {
       const [syncStatus, connectedClients] = await Promise.all([
         getSyncStatus(),
@@ -26,6 +29,7 @@ function Dashboard() {
       console.error("Failed to fetch dashboard data:", error);
     } finally {
       setLoading(false);
+      fetchInProgress.current = false;
     }
   };
 

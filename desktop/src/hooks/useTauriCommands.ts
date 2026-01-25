@@ -1,5 +1,29 @@
 import { invoke } from "@tauri-apps/api/core";
 
+const DEFAULT_INVOKE_TIMEOUT_MS = 8000;
+
+async function invokeWithTimeout<T>(
+  command: string,
+  args?: Record<string, unknown>,
+  timeoutMs: number = DEFAULT_INVOKE_TIMEOUT_MS
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      invoke<T>(command, args),
+      new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error(`Command timeout: ${command}`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
 export interface Config {
   enabled: boolean;
   auto_sync: boolean;
@@ -46,41 +70,41 @@ export interface ConnectedClient {
 }
 
 export async function getConfig(): Promise<Config> {
-  return invoke<Config>("get_config");
+  return invokeWithTimeout<Config>("get_config");
 }
 
 export async function saveConfig(config: Config): Promise<boolean> {
-  return invoke<boolean>("save_config", { config });
+  return invokeWithTimeout<boolean>("save_config", { config });
 }
 
 export async function getBookmarks(): Promise<BookmarksData> {
-  return invoke<BookmarksData>("get_bookmarks");
+  return invokeWithTimeout<BookmarksData>("get_bookmarks", undefined, 12000);
 }
 
 export async function syncBookmarks(extensionBookmarks: BookmarkData[]): Promise<BookmarkData[]> {
-  return invoke<BookmarkData[]>("sync_bookmarks", { extensionBookmarks });
+  return invokeWithTimeout<BookmarkData[]>("sync_bookmarks", { extensionBookmarks }, 20000);
 }
 
 export async function addBookmark(bookmark: BookmarkData): Promise<boolean> {
-  return invoke<boolean>("add_bookmark", { bookmark });
+  return invokeWithTimeout<boolean>("add_bookmark", { bookmark });
 }
 
 export async function removeBookmark(bookmarkId: string): Promise<boolean> {
-  return invoke<boolean>("remove_bookmark", { bookmarkId });
+  return invokeWithTimeout<boolean>("remove_bookmark", { bookmarkId });
 }
 
 export async function getSyncStatus(): Promise<SyncStatus> {
-  return invoke<SyncStatus>("get_sync_status");
+  return invokeWithTimeout<SyncStatus>("get_sync_status");
 }
 
 export async function getConnectedClients(): Promise<ConnectedClient[]> {
-  return invoke<ConnectedClient[]>("get_connected_clients");
+  return invokeWithTimeout<ConnectedClient[]>("get_connected_clients");
 }
 
 export async function requestSyncFromExtensions(): Promise<void> {
-  return invoke<void>("request_sync_from_extensions");
+  return invokeWithTimeout<void>("request_sync_from_extensions", undefined, 12000);
 }
 
 export async function getDataDirectory(): Promise<string> {
-  return invoke<string>("get_data_directory");
+  return invokeWithTimeout<string>("get_data_directory");
 }

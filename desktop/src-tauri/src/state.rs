@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter};
+use log::info;
 use crate::config::Config;
 use crate::bookmarks::BookmarksData;
 
@@ -41,6 +43,7 @@ pub struct AppState {
     pub sync_status: RwLock<SyncStatus>,
     pub connected_clients: RwLock<HashMap<String, ConnectedClient>>,
     pub websocket_tx: RwLock<Option<tokio::sync::broadcast::Sender<String>>>,
+    pub app_handle: RwLock<Option<AppHandle>>,
 }
 
 impl AppState {
@@ -54,19 +57,45 @@ impl AppState {
             sync_status: RwLock::new(status),
             connected_clients: RwLock::new(HashMap::new()),
             websocket_tx: RwLock::new(None),
+            app_handle: RwLock::new(None),
+        }
+    }
+
+    pub fn set_app_handle(&self, handle: AppHandle) {
+        *self.app_handle.write() = Some(handle);
+    }
+
+    /// Émet un événement vers le frontend React
+    pub fn emit_to_frontend<S: Serialize + Clone>(&self, event: &str, payload: S) {
+        if let Some(handle) = self.app_handle.read().as_ref() {
+            if let Err(e) = handle.emit(event, payload) {
+                log::error!("Failed to emit event {}: {}", event, e);
+            } else {
+                info!("Event emitted: {}", event);
+            }
         }
     }
 
     pub fn add_client(&self, client: ConnectedClient) {
-        let mut clients = self.connected_clients.write();
-        clients.insert(client.id.clone(), client);
-        self.update_client_count();
+        let (count, clients_list) = {
+            let mut clients = self.connected_clients.write();
+            clients.insert(client.id.clone(), client);
+            (clients.len(), clients.values().cloned().collect::<Vec<_>>())
+        };
+        self.update_client_count(count);
+        // Émettre l'événement vers le frontend
+        self.emit_to_frontend("clients_updated", &clients_list);
     }
 
     pub fn remove_client(&self, client_id: &str) {
-        let mut clients = self.connected_clients.write();
-        clients.remove(client_id);
-        self.update_client_count();
+        let (count, clients_list) = {
+            let mut clients = self.connected_clients.write();
+            clients.remove(client_id);
+            (clients.len(), clients.values().cloned().collect::<Vec<_>>())
+        };
+        self.update_client_count(count);
+        // Émettre l'événement vers le frontend
+        self.emit_to_frontend("clients_updated", &clients_list);
     }
 
     pub fn update_client_activity(&self, client_id: &str) {
@@ -76,8 +105,7 @@ impl AppState {
         }
     }
 
-    fn update_client_count(&self) {
-        let count = self.connected_clients.read().len();
+    fn update_client_count(&self, count: usize) {
         let mut status = self.sync_status.write();
         status.connected_clients = count;
     }
@@ -88,15 +116,20 @@ impl AppState {
     }
 
     pub fn update_sync_complete(&self, success: bool, error: Option<String>) {
-        let mut status = self.sync_status.write();
-        status.sync_in_progress = false;
-        if success {
-            status.last_sync = Some(Utc::now());
-            status.last_error = None;
-        } else {
-            status.last_error = error;
-        }
-        status.total_bookmarks = self.bookmarks.read().bookmarks.len();
+        let status_clone = {
+            let mut status = self.sync_status.write();
+            status.sync_in_progress = false;
+            if success {
+                status.last_sync = Some(Utc::now());
+                status.last_error = None;
+            } else {
+                status.last_error = error;
+            }
+            status.total_bookmarks = self.bookmarks.read().bookmarks.len();
+            status.clone()
+        };
+        // Émettre l'événement vers le frontend
+        self.emit_to_frontend("sync_status_updated", &status_clone);
     }
 
     pub fn broadcast_message(&self, message: &str) {

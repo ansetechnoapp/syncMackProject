@@ -16,7 +16,7 @@ use state::AppState;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize logging
-    env_logger::init();
+    let _ = env_logger::try_init();
 
     // Load initial state
     let config = ConfigManager::load_config();
@@ -43,13 +43,22 @@ pub fn run() {
             request_sync_from_extensions,
             get_data_directory,
         ])
-        .setup(move |_app| {
+        .setup(move |app| {
+            // Store AppHandle for event emission
+            app_state.set_app_handle(app.handle().clone());
+
             let state = app_state.clone();
             let state_for_watcher = app_state.clone();
 
             // Start WebSocket server
             std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().unwrap();
+                let rt = match tokio::runtime::Runtime::new() {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        log::error!("Failed to create Tokio runtime (websocket): {}", e);
+                        return;
+                    }
+                };
                 rt.block_on(async {
                     websocket::start_websocket_server(state, ws_port).await;
                 });
@@ -57,7 +66,13 @@ pub fn run() {
 
             // Start file watcher
             std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().unwrap();
+                let rt = match tokio::runtime::Runtime::new() {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        log::error!("Failed to create Tokio runtime (file watcher): {}", e);
+                        return;
+                    }
+                };
                 rt.block_on(async {
                     file_watcher::start_file_watcher(state_for_watcher).await;
                 });
@@ -67,5 +82,7 @@ pub fn run() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .unwrap_or_else(|e| {
+            log::error!("Tauri runtime error: {}", e);
+        });
 }

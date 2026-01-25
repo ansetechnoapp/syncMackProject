@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   getBookmarks,
   removeBookmark,
@@ -10,8 +10,11 @@ function BookmarksList() {
   const [bookmarksData, setBookmarksData] = useState<BookmarksData | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [loading, setLoading] = useState(true);
+  const fetchInProgress = useRef(false);
 
   const fetchBookmarks = async () => {
+    if (fetchInProgress.current) return;
+    fetchInProgress.current = true;
     try {
       const data = await getBookmarks();
       setBookmarksData(data);
@@ -19,6 +22,7 @@ function BookmarksList() {
       console.error("Failed to fetch bookmarks:", error);
     } finally {
       setLoading(false);
+      fetchInProgress.current = false;
     }
   };
 

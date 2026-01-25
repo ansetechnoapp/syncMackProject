@@ -26,6 +26,15 @@ desktop/src-tauri/target/
 desktop/src-tauri/gen/
 .cargo_home/
 
+# Tauri generated icons (keep only source icons)
+desktop/src-tauri/icons/android/
+desktop/src-tauri/icons/ios/
+desktop/src-tauri/icons/*.icns
+desktop/src-tauri/icons/*.ico
+desktop/src-tauri/icons/Square*.png
+desktop/src-tauri/icons/StoreLogo.png
+desktop/src-tauri/icons/64x64.png
+
 # Local native host manifest (machine-specific path)
 com.syncmark.host.json
 
