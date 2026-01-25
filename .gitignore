@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+**/__pycache__/
+*.pyc
+.venv/
+
+# Logs
+logs/
+*.log
+
+# Rust build artifacts
+backend_rust/target/
+.cargo_home/
+
+# Local native host manifest (machine-specific path)
+com.syncmark.host.json
+
+# Environment variables
+config/.env
+
+# Extension build outputs
+extension/builds/
+
+# IDE settings
+.idea/
+.vscode/
+

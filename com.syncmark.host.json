@@ -1,9 +1,9 @@
 {
-    "name": "com.syncmark.host",
-    "description": "Native messaging host for SyncMark",
-    "path": "C:\\laragon\\www\\syncMackProject\\backend\\service.py",
-    "type": "stdio",
-    "allowed_origins": [
-        "chrome-extension://omjaofhidckniiggbpaapnpaioejfaof/"
-    ]
+  "name": "com.syncmark.host",
+  "description": "SyncMark Native Host (Rust)",
+  "path": "/Users/kevin/Projects/syncMackProject/backend_rust/target/release/backend_rust",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://jcafeienjkpkpmhkdhhahmmhngaiahcc/"
+  ]
 }

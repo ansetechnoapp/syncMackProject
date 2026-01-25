@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3:*)",
+      "Bash(xxd:*)",
+      "Bash(test:*)",
+      "Bash(xattr:*)",
+      "Read(//tmp/**)",
+      "Bash(ls:*)",
+      "Bash(sudo mkdir:*)",
+      "Bash(sudo cp:*)",
+      "Bash(sudo chmod:*)",
+      "Bash(/Users/kevin/Projects/syncMackProject/backend_rust/backend_wrapper.sh:*)"
+    ]
+  }
+}

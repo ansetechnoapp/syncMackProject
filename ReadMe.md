@@ -1,19 +1,27 @@
-# SyncMark - Extension Multi-Navigateurs
+# SyncMark - Extension Multi-Navigateurs (Rust Backend)
 
-Synchronisez vos favoris entre tous vos navigateurs (Chrome, Edge, Firefox, Opera, Brave, Vivaldi).
+Synchronisez vos favoris entre tous vos navigateurs (Chrome, Edge, Firefox, Opera, Brave, Vivaldi) avec un backend performant en **Rust**.
 
 ## 🚀 Installation Rapide
 
+### macOS / Linux
 ```bash
+./scripts/install.sh
+```
+
+### Windows
+```cmd
 cd scripts/
 install.bat
 ```
 
+> **Note :** Le backend a été migré de Python vers Rust pour de meilleures performances et une consommation mémoire réduite.
+
 ## 📁 Structure du Projet
 
-- **`extension/`** - Code source et versions compilées de l'extension
+- **`backend_rust/`** - Nouveau backend haute performance en Rust
+- **`extension/`** - Code source de l'extension Web (Manifest V3)
 - **`scripts/`** - Scripts d'installation et de maintenance
-- **`tests/`** - Tests et diagnostics
 - **`docs/`** - Documentation complète
 
 ## 🌐 Navigateurs Supportés
@@ -26,36 +34,26 @@ install.bat
 - ✅ Vivaldi
 - ✅ Autres navigateurs Chromium
 
-## 📖 Documentation
+## � Développement
 
-Voir le dossier `docs/` pour la documentation complète.
+### Prérequis
+- **Rust** (installé via [rustup](https://rustup.rs/))
+- **Python 3** (uniquement pour les scripts d'installation)
 
-## 🔧 Développement
+### Compiler le Backend (Rust)
+```bash
+cd backend_rust/
+cargo build --release
+```
 
-1. **Backend :**  
-   a. Créez un environnement virtuel Python :  
-      ```bash
-      cd backend/
-      python -m venv .venv
-      ```
-   b. Activez l'environnement virtuel :  
-      - **Windows :**  
-        ```bash
-        .venv\Scripts\activate
-        ```
-      - **Linux/macOS :**  
-        ```bash
-        source .venv/bin/activate
-        ```
-   c. Installez les dépendances :  
-      ```bash
-      python -m pip install -r requirements.txt
-      ```
-2. **Extension :** Charger `extension/source/` en mode développeur
-3. **Tests :** `cd tests/ && test_all.bat`
+### Installer l'extension
+1. Ouvrez `chrome://extensions` (ou équivalent)
+2. Activez le "Mode développeur"
+3. Cliquez sur "Charger l'extension non empaquetée"
+4. Sélectionnez le dossier `extension/src`
 
 ---
 
-**Version :** 2.1 Multi-Browser  
+**Version :** 3.0 (Rust Edition)
 **Licence :** MIT  
 **Auteur :** Équipe SyncMark
