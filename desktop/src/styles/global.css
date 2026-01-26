@@ -798,3 +798,27 @@ input:checked + .slider:before {
   border-radius: 12px;
   font-size: 12px;
 }
+
+/* Drag and Drop */
+.dragging {
+  opacity: 0.5;
+  background: var(--bg-input);
+}
+
+.droppable {
+  border: 2px dashed var(--primary);
+  background: rgba(52, 152, 219, 0.1);
+}
+
+.drag-overlay-item {
+  padding: 10px 15px;
+  background: var(--bg-card);
+  border: 1px solid var(--primary);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: grabbing;
+}

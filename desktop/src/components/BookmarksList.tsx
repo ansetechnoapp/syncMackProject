@@ -1,5 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  DndContext,
+  DragOverlay,
+  useDraggable,
+  useDroppable,
+  DragEndEvent,
+  DragStartEvent,
+  pointerWithin,
+  useSensor,
+  useSensors,
+  PointerSensor,
+  TouchSensor,
+} from "@dnd-kit/core";
+import {
   getBookmarksTree,
   removeBookmark,
   updateBookmark,
@@ -14,6 +27,7 @@ import {
   type SyncStatus,
 } from "../hooks/useTauriCommands";
 import { useBookmarksUpdated, useSyncStatusUpdated } from "../hooks/useRealtimeEvents";
+import { findNode } from "../utils/treeUtils";
 
 function BookmarksList() {
   const [tree, setTree] = useState<BookmarksTree | null>(null);
@@ -24,6 +38,16 @@ function BookmarksList() {
   const [creatingFolderIn, setCreatingFolderIn] = useState<string | null>(null);
   const [creatingBookmark, setCreatingBookmark] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
+  const [activeNode, setActiveNode] = useState<TreeNode | null>(null);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    }),
+    useSensor(TouchSensor)
+  );
 
   const loadTree = async () => {
     try {
@@ -41,7 +65,6 @@ function BookmarksList() {
     getSyncStatus().then(setSyncStatus).catch(console.error);
   }, []);
 
-  // Écouter les mises à jour du statut de synchronisation
   const handleSyncStatusUpdate = useCallback((newStatus: SyncStatus) => {
     setSyncStatus(newStatus);
   }, []);
@@ -56,7 +79,6 @@ function BookmarksList() {
     }
   };
 
-  // Recharger l'arbre quand les bookmarks sont mis à jour
   const handleBookmarksUpdate = useCallback(() => {
     loadTree();
   }, []);
@@ -139,6 +161,60 @@ function BookmarksList() {
     }
   };
 
+  // Drag and Drop Handlers
+  const handleDragStart = (event: DragStartEvent) => {
+    const { active } = event;
+    if (tree) {
+        const node = findNode(tree.items, active.id as string);
+        setActiveNode(node);
+    }
+  };
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    setActiveNode(null);
+
+    if (!over || !active) return;
+    if (active.id === over.id) return;
+
+    // We only support dropping into a folder
+    // over.id is the target folder ID
+    
+    // Check if we are dropping onto a folder
+    // We need to know if the target is a folder.
+    // The Droppable ID is the folder ID.
+    
+    const targetId = over.id as string;
+    
+    // Prevent dropping a folder into itself or its children (cycle check)
+    // For now, let's assume we can drop. Cycle check is a bit complex but important.
+    // Ideally the backend prevents cycles or we check it here.
+    
+    // Perform the move
+    // We need to update the parentId of the active item to the targetId.
+    if (tree) {
+        const node = findNode(tree.items, active.id as string);
+        if (node) {
+            // Optimistic update?
+            // For now, just call backend.
+            try {
+                if (node.isFolder) {
+                    // Check for cycle: if targetId is a descendant of node.id
+                    // Simple check: cannot drop folder into itself
+                    if (targetId === node.id) return;
+                    
+                    await updateFolder(node.id as string, { ...node, parentId: targetId });
+                } else {
+                    await updateBookmark(node.id as string, { ...node, parentId: targetId });
+                }
+                // Refresh is handled by useBookmarksUpdated
+            } catch (error) {
+                console.error("Failed to move item:", error);
+            }
+        }
+    }
+  };
+
   const collectFolders = (nodes: TreeNode[], prefix: string = ""): Array<{ id: string; label: string }> => {
     const result: Array<{ id: string; label: string }> = [];
     for (const node of nodes) {
@@ -155,7 +231,6 @@ function BookmarksList() {
 
   const folderOptions = tree ? collectFolders(tree.items) : [];
 
-  // Filtrer les nœuds par recherche
   const filterNodes = (nodes: TreeNode[], term: string): TreeNode[] => {
     if (!term) return nodes;
 
@@ -185,94 +260,109 @@ function BookmarksList() {
   }
 
   return (
-    <div className="bookmarks-list">
-      <div className="bookmarks-header">
-        <h2>Favoris synchronises</h2>
-        <div className="bookmarks-meta">
-          <span>{tree?.total_bookmarks || 0} favoris</span>
-          <span>{tree?.total_folders || 0} dossiers</span>
+    <DndContext 
+        sensors={sensors} 
+        onDragStart={handleDragStart} 
+        onDragEnd={handleDragEnd}
+        collisionDetection={pointerWithin}
+    >
+        <div className="bookmarks-list">
+        <div className="bookmarks-header">
+            <h2>Favoris synchronises</h2>
+            <div className="bookmarks-meta">
+            <span>{tree?.total_bookmarks || 0} favoris</span>
+            <span>{tree?.total_folders || 0} dossiers</span>
+            </div>
         </div>
-      </div>
 
-      <div className="search-bar">
-        <input
-          type="text"
-          placeholder="Rechercher un favori..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="search-input"
-        />
-        <button
-          className="btn btn-small btn-primary"
-          onClick={handleRequestSync}
-          disabled={syncStatus?.sync_in_progress}
-          title="Synchroniser avec les extensions"
-        >
-          {syncStatus?.sync_in_progress ? "Sync..." : "Synchroniser"}
-        </button>
-        <button
-          className="btn btn-small btn-primary"
-          onClick={() => setCreatingBookmark(true)}
-          title="Nouveau favori"
-        >
-          + Favori
-        </button>
-        <button
-          className="btn btn-small btn-secondary"
-          onClick={() => setCreatingFolderIn("root")}
-          title="Nouveau dossier"
-        >
-          + Dossier
-        </button>
-      </div>
+        <div className="search-bar">
+            <input
+            type="text"
+            placeholder="Rechercher un favori..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="search-input"
+            />
+            <button
+            className="btn btn-small btn-primary"
+            onClick={handleRequestSync}
+            disabled={syncStatus?.sync_in_progress}
+            title="Synchroniser avec les extensions"
+            >
+            {syncStatus?.sync_in_progress ? "Sync..." : "Synchroniser"}
+            </button>
+            <button
+            className="btn btn-small btn-primary"
+            onClick={() => setCreatingBookmark(true)}
+            title="Nouveau favori"
+            >
+            + Favori
+            </button>
+            <button
+            className="btn btn-small btn-secondary"
+            onClick={() => setCreatingFolderIn("root")}
+            title="Nouveau dossier"
+            >
+            + Dossier
+            </button>
+        </div>
 
-      {creatingBookmark && (
-        <NewBookmarkForm
-          folders={folderOptions}
-          onSave={(title, url, parentId) => handleCreateBookmark(title, url, parentId)}
-          onCancel={() => setCreatingBookmark(false)}
-        />
-      )}
-
-      {creatingFolderIn === "root" && (
-        <NewFolderForm
-          onSave={(title) => handleCreateFolder(title, null)}
-          onCancel={() => setCreatingFolderIn(null)}
-        />
-      )}
-
-      <div className="bookmarks-container">
-        {filteredItems.length === 0 ? (
-          <div className="empty-state">
-            {searchTerm
-              ? "Aucun favori ne correspond a votre recherche"
-              : "Aucun favori synchronise"}
-          </div>
-        ) : (
-          <ul className="bookmarks-tree">
-            {filteredItems.map((node, index) => (
-              <TreeNodeItem
-                key={node.id || index}
-                node={node}
-                depth={0}
-                expandedFolders={expandedFolders}
-                editingId={editingId}
-                creatingFolderIn={creatingFolderIn}
-                onToggleFolder={toggleFolder}
-                onDeleteBookmark={handleDeleteBookmark}
-                onDeleteFolder={handleDeleteFolder}
-                onEdit={handleEdit}
-                onCancelEdit={handleCancelEdit}
-                onSaveBookmark={handleSaveBookmark}
-                onSaveFolder={handleSaveFolder}
-                onCreateFolderIn={setCreatingFolderIn}
-                onCreateFolder={handleCreateFolder}
-              />
-            ))}
-          </ul>
+        {creatingBookmark && (
+            <NewBookmarkForm
+            folders={folderOptions}
+            onSave={(title, url, parentId) => handleCreateBookmark(title, url, parentId)}
+            onCancel={() => setCreatingBookmark(false)}
+            />
         )}
-      </div>
-    </div>
+
+        {creatingFolderIn === "root" && (
+            <NewFolderForm
+            onSave={(title) => handleCreateFolder(title, null)}
+            onCancel={() => setCreatingFolderIn(null)}
+            />
+        )}
+
+        <div className="bookmarks-container">
+            {filteredItems.length === 0 ? (
+            <div className="empty-state">
+                {searchTerm
+                ? "Aucun favori ne correspond a votre recherche"
+                : "Aucun favori synchronise"}
+            </div>
+            ) : (
+            <ul className="bookmarks-tree">
+                {filteredItems.map((node, index) => (
+                <TreeNodeItem
+                    key={node.id || index}
+                    node={node}
+                    depth={0}
+                    expandedFolders={expandedFolders}
+                    editingId={editingId}
+                    creatingFolderIn={creatingFolderIn}
+                    onToggleFolder={toggleFolder}
+                    onDeleteBookmark={handleDeleteBookmark}
+                    onDeleteFolder={handleDeleteFolder}
+                    onEdit={handleEdit}
+                    onCancelEdit={handleCancelEdit}
+                    onSaveBookmark={handleSaveBookmark}
+                    onSaveFolder={handleSaveFolder}
+                    onCreateFolderIn={setCreatingFolderIn}
+                    onCreateFolder={handleCreateFolder}
+                />
+                ))}
+            </ul>
+            )}
+        </div>
+        
+        <DragOverlay>
+            {activeNode ? (
+                <div className="drag-overlay-item">
+                     {activeNode.isFolder ? "📁 " + activeNode.title : "📄 " + activeNode.title}
+                </div>
+            ) : null}
+        </DragOverlay>
+        </div>
+    </DndContext>
   );
 }
 
@@ -293,122 +383,166 @@ interface TreeNodeItemProps {
   onCreateFolder: (title: string, parentId: string | null) => void;
 }
 
-function TreeNodeItem({
-  node,
-  depth,
-  expandedFolders,
-  editingId,
-  creatingFolderIn,
-  onToggleFolder,
-  onDeleteBookmark,
-  onDeleteFolder,
-  onEdit,
-  onCancelEdit,
-  onSaveBookmark,
-  onSaveFolder,
-  onCreateFolderIn,
-  onCreateFolder,
-}: TreeNodeItemProps) {
-  const isExpanded = node.id ? expandedFolders.has(node.id) : false;
-  const isEditing = editingId === node.id;
-  const isCreatingSubfolder = creatingFolderIn === node.id;
+function TreeNodeItem(props: TreeNodeItemProps) {
+  const { node } = props;
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: node.id || 'unknown',
+    data: node,
+  });
+  
+  // Use Droppable only for folders
+  const { setNodeRef: setDroppableNodeRef, isOver } = useDroppable({
+    id: node.id || 'unknown',
+    data: node,
+    disabled: !node.isFolder,
+  });
+
+  const style = {
+    "--depth": props.depth,
+    opacity: isDragging ? 0.5 : 1,
+    backgroundColor: isOver && node.isFolder ? 'rgba(0, 120, 215, 0.1)' : undefined,
+    border: isOver && node.isFolder ? '2px dashed #0078d4' : undefined,
+  } as React.CSSProperties;
+
+  // Combine refs
+  const setRef = (element: HTMLElement | null) => {
+    setNodeRef(element);
+    if (node.isFolder) {
+        setDroppableNodeRef(element);
+    }
+  };
 
   if (node.isFolder) {
     return (
-      <li className="tree-node folder-node" style={{ "--depth": depth } as React.CSSProperties}>
-        {isEditing ? (
-          <FolderEditForm
-            node={node}
-            onSave={onSaveFolder}
-            onCancel={onCancelEdit}
-          />
-        ) : (
-          <>
-            <div className="folder-header" onClick={() => node.id && onToggleFolder(node.id)}>
-              <span className="folder-toggle">{isExpanded ? "v" : ">"}</span>
-              <span className="folder-icon">📁</span>
-              <span className="folder-title">{node.title || "Sans nom"}</span>
-              <span className="folder-count">({node.children?.length || 0})</span>
-              <div className="node-actions" onClick={(e) => e.stopPropagation()}>
-                <button
-                  className="btn-icon btn-add"
-                  onClick={() => node.id && onCreateFolderIn(node.id)}
-                  title="Nouveau sous-dossier"
-                >
-                  +
-                </button>
-                <button
-                  className="btn-icon btn-edit"
-                  onClick={() => node.id && onEdit(node.id)}
-                  title="Modifier"
-                >
-                  ✏️
-                </button>
-                <button
-                  className="btn-icon btn-delete"
-                  onClick={() => node.id && onDeleteFolder(node.id)}
-                  title="Supprimer"
-                >
-                  🗑️
-                </button>
-              </div>
-            </div>
-
-            {isCreatingSubfolder && (
-              <NewFolderForm
-                onSave={(title) => onCreateFolder(title, node.id || null)}
-                onCancel={() => onCreateFolderIn(null)}
-              />
-            )}
-
-            {isExpanded && node.children && node.children.length > 0 && (
-              <ul className="folder-children">
-                {node.children.map((child, index) => (
-                  <TreeNodeItem
-                    key={child.id || index}
-                    node={child}
-                    depth={depth + 1}
-                    expandedFolders={expandedFolders}
-                    editingId={editingId}
-                    creatingFolderIn={creatingFolderIn}
-                    onToggleFolder={onToggleFolder}
-                    onDeleteBookmark={onDeleteBookmark}
-                    onDeleteFolder={onDeleteFolder}
-                    onEdit={onEdit}
-                    onCancelEdit={onCancelEdit}
-                    onSaveBookmark={onSaveBookmark}
-                    onSaveFolder={onSaveFolder}
-                    onCreateFolderIn={onCreateFolderIn}
-                    onCreateFolder={onCreateFolder}
-                  />
-                ))}
-              </ul>
-            )}
-          </>
-        )}
+      <li 
+        ref={setRef} 
+        className={`tree-node folder-node ${isDragging ? 'dragging' : ''} ${isOver ? 'droppable' : ''}`} 
+        style={style}
+      >
+        <FolderContent {...props} listeners={listeners} attributes={attributes} />
       </li>
     );
   }
 
   // Bookmark node
   return (
-    <li className="tree-node bookmark-node" style={{ "--depth": depth } as React.CSSProperties}>
-      {isEditing ? (
-        <BookmarkEditForm
-          node={node}
-          onSave={onSaveBookmark}
-          onCancel={onCancelEdit}
-        />
-      ) : (
-        <BookmarkItem
-          node={node}
-          onDelete={onDeleteBookmark}
-          onEdit={onEdit}
-        />
-      )}
+    <li 
+        ref={setRef} 
+        className={`tree-node bookmark-node ${isDragging ? 'dragging' : ''}`} 
+        style={style}
+        {...listeners}
+        {...attributes}
+    >
+      <BookmarkContent {...props} />
     </li>
   );
 }
+
+function FolderContent({ node, expandedFolders, editingId, creatingFolderIn, onToggleFolder, onEdit, onDeleteFolder, onCancelEdit, onSaveFolder, onCreateFolderIn, onCreateFolder, depth, listeners, attributes, onDeleteBookmark, onSaveBookmark }: TreeNodeItemProps & { listeners: any, attributes: any }) {
+    const isExpanded = node.id ? expandedFolders.has(node.id) : false;
+    const isEditing = editingId === node.id;
+    const isCreatingSubfolder = creatingFolderIn === node.id;
+
+    if (isEditing) {
+        return (
+          <FolderEditForm
+            node={node}
+            onSave={onSaveFolder}
+            onCancel={onCancelEdit}
+          />
+        );
+    }
+
+    return (
+        <>
+        <div className="folder-header" onClick={() => node.id && onToggleFolder(node.id)} {...listeners} {...attributes}>
+            <span className="folder-toggle">{isExpanded ? "v" : ">"}</span>
+            <span className="folder-icon">📁</span>
+            <span className="folder-title">{node.title || "Sans nom"}</span>
+            <span className="folder-count">({node.children?.length || 0})</span>
+            <div className="node-actions" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
+            <button
+                className="btn-icon btn-add"
+                onClick={() => node.id && onCreateFolderIn(node.id)}
+                title="Nouveau sous-dossier"
+            >
+                +
+            </button>
+            <button
+                className="btn-icon btn-edit"
+                onClick={() => node.id && onEdit(node.id)}
+                title="Modifier"
+            >
+                ✏️
+            </button>
+            <button
+                className="btn-icon btn-delete"
+                onClick={() => node.id && onDeleteFolder(node.id)}
+                title="Supprimer"
+            >
+                🗑️
+            </button>
+            </div>
+        </div>
+
+        {isCreatingSubfolder && (
+            <NewFolderForm
+            onSave={(title) => onCreateFolder(title, node.id || null)}
+            onCancel={() => onCreateFolderIn(null)}
+            />
+        )}
+
+        {isExpanded && node.children && node.children.length > 0 && (
+            <ul className="folder-children">
+            {node.children.map((child, index) => (
+                <TreeNodeItem
+                key={child.id || index}
+                node={child}
+                depth={depth + 1}
+                expandedFolders={expandedFolders}
+                editingId={editingId}
+                creatingFolderIn={creatingFolderIn}
+                onToggleFolder={onToggleFolder}
+                onDeleteBookmark={onDeleteBookmark}
+                onDeleteFolder={onDeleteFolder}
+                onEdit={onEdit}
+                onCancelEdit={onCancelEdit}
+                onSaveBookmark={onSaveBookmark}
+                onSaveFolder={onSaveFolder}
+                onCreateFolderIn={onCreateFolderIn}
+                onCreateFolder={onCreateFolder}
+                />
+            ))}
+            </ul>
+        )}
+        </>
+    );
+}
+
+function BookmarkContent({ node, editingId, onEdit, onDeleteBookmark, onCancelEdit, onSaveBookmark }: TreeNodeItemProps) {
+    const isEditing = editingId === node.id;
+
+    if (isEditing) {
+        return (
+            <BookmarkEditForm
+            node={node}
+            onSave={onSaveBookmark}
+            onCancel={onCancelEdit}
+            />
+        );
+    }
+
+    return (
+        <BookmarkItem
+            node={node}
+            onDelete={onDeleteBookmark}
+            onEdit={onEdit}
+        />
+    );
+}
+
+// ... Rest of the components (BookmarkItem, BookmarkEditForm, FolderEditForm, NewFolderForm, NewBookmarkForm) remain the same
+// I need to copy them back to ensure they are present.
 
 interface BookmarkItemProps {
   node: TreeNode;
@@ -448,11 +582,13 @@ function BookmarkItem({ node, onDelete, onEdit }: BookmarkItemProps) {
           target="_blank"
           rel="noopener noreferrer"
           className="bookmark-url"
+          // Prevent drag start on link
+          draggable={false}
         >
           {node.url}
         </a>
       </div>
-      <div className="node-actions">
+      <div className="node-actions" onPointerDown={(e) => e.stopPropagation()}>
         {node.id && (
           <>
             <button
@@ -492,7 +628,7 @@ function BookmarkEditForm({ node, onSave, onCancel }: BookmarkEditFormProps) {
   };
 
   return (
-    <form className="edit-form" onSubmit={handleSubmit}>
+    <form className="edit-form" onSubmit={handleSubmit} onPointerDown={(e) => e.stopPropagation()}>
       <input
         type="text"
         value={title}
@@ -531,7 +667,7 @@ function FolderEditForm({ node, onSave, onCancel }: FolderEditFormProps) {
   };
 
   return (
-    <form className="edit-form folder-edit" onSubmit={handleSubmit}>
+    <form className="edit-form folder-edit" onSubmit={handleSubmit} onPointerDown={(e) => e.stopPropagation()}>
       <span className="folder-icon">📁</span>
       <input
         type="text"
@@ -565,7 +701,7 @@ function NewFolderForm({ onSave, onCancel }: NewFolderFormProps) {
   };
 
   return (
-    <form className="new-folder-form" onSubmit={handleSubmit}>
+    <form className="new-folder-form" onSubmit={handleSubmit} onPointerDown={(e) => e.stopPropagation()}>
       <span className="folder-icon">📁</span>
       <input
         type="text"
@@ -601,7 +737,7 @@ function NewBookmarkForm({ folders, onSave, onCancel }: NewBookmarkFormProps) {
   };
 
   return (
-    <form className="new-folder-form" onSubmit={handleSubmit}>
+    <form className="new-folder-form" onSubmit={handleSubmit} onPointerDown={(e) => e.stopPropagation()}>
       <input
         type="text"
         value={title}
