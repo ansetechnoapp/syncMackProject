@@ -1,9 +1,10 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
-use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tokio_tungstenite::tungstenite::Message;
 use chrono::Utc;
 use log::{error, info, warn};
 use serde_json::{json, Value};
@@ -11,6 +12,15 @@ use uuid::Uuid;
 
 use crate::state::{SharedState, ConnectedClient};
 use crate::bookmarks::BookmarksManager;
+
+/// Nombre maximum de clients WebSocket autorisés simultanément
+const MAX_CLIENTS: usize = 10;
+
+/// Types de messages WebSocket autorisés (validation sécurité)
+const ALLOWED_MESSAGE_TYPES: &[&str] = &[
+    "ping", "get_status", "sync_bookmarks", "bookmark_created", "bookmark_removed",
+    "bookmark_changed", "identify", "folder_created", "folder_removed", "folder_changed",
+];
 
 pub async fn start_websocket_server(state: SharedState, port: u16) {
     let addr = format!("127.0.0.1:{}", port);
@@ -31,8 +41,22 @@ pub async fn start_websocket_server(state: SharedState, port: u16) {
     *state.websocket_tx.write() = Some(tx.clone());
 
     loop {
+        // Vérifier la limite de connexions avant d'accepter
+        let current_clients = state.connected_clients.read().len();
+        if current_clients >= MAX_CLIENTS {
+            warn!("Max clients reached ({}), waiting before accepting new connections", MAX_CLIENTS);
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            continue;
+        }
+
         match listener.accept().await {
             Ok((stream, addr)) => {
+                // Vérifier que la connexion vient de localhost (sécurité)
+                if !addr.ip().is_loopback() {
+                    warn!("Rejected non-localhost connection from {}", addr);
+                    continue;
+                }
+
                 let state = Arc::clone(&state);
                 let rx = tx.subscribe();
                 tokio::spawn(async move {
@@ -52,7 +76,40 @@ async fn handle_connection(
     state: SharedState,
     mut broadcast_rx: broadcast::Receiver<String>,
 ) {
-    let ws_stream = match accept_async(stream).await {
+    let callback = |req: &tokio_tungstenite::tungstenite::handshake::server::Request, response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+        let headers = req.headers();
+        let origin = headers.get("Origin")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("unknown");
+            
+        info!("WebSocket connection attempt from Origin: {}", origin);
+        
+        // Validation stricte de l'origine
+        // Accepter:
+        // 1. Extensions Chrome (chrome-extension://...)
+        // 2. Localhost (http://localhost:..., http://127.0.0.1:...)
+        // 3. Tauri (tauri://...)
+        // 4. "unknown" ou null (souvent le cas pour les clients non-navigateur ou certaines configs, mais attention au risque. 
+        //    Pour une sécurité max, on devrait rejeter unknown si on est sûr que l'extension envoie l'origine)
+        
+        let is_valid = origin.starts_with("chrome-extension://") 
+            || origin.starts_with("http://localhost") 
+            || origin.starts_with("http://127.0.0.1")
+            || origin.starts_with("tauri://")
+            || origin == "null" // Parfois envoyé par des clients locaux/files
+            || origin == "unknown"; // Au cas où pas d'header
+
+        if !is_valid {
+            warn!("Rejected WebSocket connection with invalid Origin: {}", origin);
+            let mut resp = tokio_tungstenite::tungstenite::handshake::server::ErrorResponse::new(Some("Invalid Origin".to_string()));
+            *resp.status_mut() = tokio_tungstenite::tungstenite::http::StatusCode::FORBIDDEN;
+            return Err(resp);
+        }
+
+        Ok(response)
+    };
+
+    let ws_stream = match tokio_tungstenite::accept_hdr_async(stream, callback).await {
         Ok(ws) => ws,
         Err(e) => {
             error!("WebSocket handshake failed for {}: {}", addr, e);
@@ -122,6 +179,49 @@ async fn handle_connection(
     info!("Client {} removed", client_id);
 }
 
+/// Valide qu'un message WebSocket est autorisé et bien formé
+fn is_valid_message(message: &Value) -> bool {
+    let msg_type = match message.get("type").and_then(|v| v.as_str()) {
+        Some(t) => t,
+        None => return false,
+    };
+
+    // Vérifier que le type est autorisé
+    if !ALLOWED_MESSAGE_TYPES.contains(&msg_type) {
+        return false;
+    }
+
+    // Validations spécifiques par type
+    match msg_type {
+        "sync_bookmarks" => {
+            message.get("payload")
+                .and_then(|p| p.get("bookmarks"))
+                .and_then(|b| b.as_array())
+                .is_some()
+        }
+        "bookmark_created" | "bookmark_changed" => {
+            message.get("payload").is_some()
+        }
+        "bookmark_removed" | "folder_removed" => {
+            message.get("payload")
+                .and_then(|p| p.get("id"))
+                .and_then(|id| id.as_str())
+                .is_some()
+        }
+        "folder_created" | "folder_changed" => {
+            message.get("payload").is_some()
+        }
+        "identify" => {
+            message.get("payload")
+                .and_then(|p| p.get("browser"))
+                .and_then(|b| b.as_str())
+                .is_some()
+        }
+        // ping et get_status n'ont pas besoin de payload
+        _ => true,
+    }
+}
+
 // Synchronous message processing to avoid holding locks across await
 fn process_client_message(
     state: &SharedState,
@@ -135,6 +235,12 @@ fn process_client_message(
             return None;
         }
     };
+
+    // Valider le message avant traitement
+    if !is_valid_message(&message) {
+        warn!("Invalid or unauthorized message from {}: {:?}", client_id, message.get("type"));
+        return None;
+    }
 
     let msg_type = message.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -155,39 +261,18 @@ fn process_client_message(
             if let Some(payload) = message.get("payload") {
                 if let Some(bookmarks) = payload.get("bookmarks").and_then(|v| v.as_array()) {
                     state.set_sync_in_progress(true);
+                    state.mark_internal_save();
 
-                    let (incoming_bookmarks, incoming_folders) = if bookmarks
-                        .first()
-                        .and_then(|b| b.get("children"))
-                        .is_some()
-                    {
-                        BookmarksManager::flatten_chrome_tree(bookmarks)
-                    } else {
-                        (bookmarks.clone(), Vec::new())
-                    };
-
-                    let (merged, folders_merged, success, bookmarks_data) = {
-                        let mut local_bookmarks = state.bookmarks.write();
-                        let merged = BookmarksManager::merge_bookmarks(
-                            &mut local_bookmarks,
-                            incoming_bookmarks,
-                        );
-                        let folders_merged = if incoming_folders.is_empty() {
-                            local_bookmarks.folders.clone()
-                        } else {
-                            BookmarksManager::merge_folders(&mut local_bookmarks, incoming_folders)
-                        };
-                        let success = BookmarksManager::save_bookmarks(&mut local_bookmarks);
-                        let data = local_bookmarks.clone();
-                        (merged, folders_merged, success, data)
+                    let (success, merged, folders_merged) = {
+                         let mut local_data = state.bookmarks.write();
+                         BookmarksManager::process_sync_payload(&mut local_data, bookmarks.clone())
                     };
 
                     state.update_sync_complete(
                         success,
                         if success { None } else { Some("Failed to save".to_string()) },
                     );
-
-                    // Broadcast to other clients (extensions)
+                    
                     let broadcast = json!({
                         "type": "bookmarks_updated",
                         "payload": { "bookmarks": &merged }
@@ -195,14 +280,14 @@ fn process_client_message(
                     state.broadcast_message(&broadcast.to_string());
 
                     if !folders_merged.is_empty() {
-                        let folders_broadcast = json!({
-                            "type": "folders_updated",
-                            "payload": { "folders": &folders_merged }
-                        });
-                        state.broadcast_message(&folders_broadcast.to_string());
+                         let folders_broadcast = json!({
+                             "type": "folders_updated",
+                             "payload": { "folders": &folders_merged }
+                         });
+                         state.broadcast_message(&folders_broadcast.to_string());
                     }
 
-                    // Émettre vers le frontend React
+                    let bookmarks_data = state.bookmarks.read().clone();
                     state.emit_to_frontend("bookmarks_updated", &bookmarks_data);
 
                     info!("Sync completed from {}: {} bookmarks", client_id, merged.len());
@@ -222,6 +307,8 @@ fn process_client_message(
 
         "bookmark_created" => {
             if let Some(payload) = message.get("payload") {
+                // Marquer qu'on fait une sauvegarde interne (évite double notification du file_watcher)
+                state.mark_internal_save();
                 let result = {
                     let mut bookmarks = state.bookmarks.write();
                     if BookmarksManager::add_bookmark(&mut bookmarks, payload.clone()) {
@@ -248,6 +335,8 @@ fn process_client_message(
         "bookmark_removed" => {
             if let Some(payload) = message.get("payload") {
                 if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
+                    // Marquer qu'on fait une sauvegarde interne (évite double notification du file_watcher)
+                    state.mark_internal_save();
                     let result = {
                         let mut bookmarks = state.bookmarks.write();
                         if BookmarksManager::remove_bookmark(&mut bookmarks, id) {
@@ -275,6 +364,8 @@ fn process_client_message(
         "bookmark_changed" => {
             if let Some(payload) = message.get("payload") {
                 if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
+                    // Marquer qu'on fait une sauvegarde interne (évite double notification du file_watcher)
+                    state.mark_internal_save();
                     let result = {
                         let mut bookmarks = state.bookmarks.write();
                         if BookmarksManager::update_bookmark(&mut bookmarks, id, payload.clone()) {
@@ -316,6 +407,8 @@ fn process_client_message(
 
         "folder_created" => {
             if let Some(payload) = message.get("payload") {
+                // Marquer qu'on fait une sauvegarde interne (évite double notification du file_watcher)
+                state.mark_internal_save();
                 let result = {
                     let mut bookmarks = state.bookmarks.write();
 
@@ -354,6 +447,8 @@ fn process_client_message(
         "folder_removed" => {
             if let Some(payload) = message.get("payload") {
                 if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
+                    // Marquer qu'on fait une sauvegarde interne (évite double notification du file_watcher)
+                    state.mark_internal_save();
                     let result = {
                         let mut bookmarks = state.bookmarks.write();
                         if BookmarksManager::remove_folder(&mut bookmarks, id) {
@@ -380,6 +475,8 @@ fn process_client_message(
         "folder_changed" => {
             if let Some(payload) = message.get("payload") {
                 if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
+                    // Marquer qu'on fait une sauvegarde interne (évite double notification du file_watcher)
+                    state.mark_internal_save();
                     let result = {
                         let mut bookmarks = state.bookmarks.write();
                         if BookmarksManager::update_folder(&mut bookmarks, id, payload.clone()) {

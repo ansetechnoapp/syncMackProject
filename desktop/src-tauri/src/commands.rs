@@ -34,29 +34,14 @@ pub fn get_bookmarks(state: State<SharedState>) -> BookmarksData {
 #[tauri::command]
 pub fn sync_bookmarks(state: State<SharedState>, extension_bookmarks: Vec<Value>) -> Vec<Value> {
     state.set_sync_in_progress(true);
-    // Marquer qu'on fait une sauvegarde interne (évite double notification du file_watcher)
     state.mark_internal_save();
 
-    let mut bookmarks = state.bookmarks.write();
-
-    let (incoming_bookmarks, incoming_folders) = if extension_bookmarks
-        .first()
-        .and_then(|b| b.get("children"))
-        .is_some()
-    {
-        BookmarksManager::flatten_chrome_tree(&extension_bookmarks)
-    } else {
-        (extension_bookmarks, Vec::new())
+    let (success, merged, folders_merged, bookmarks_data) = {
+        let mut bookmarks = state.bookmarks.write();
+        let (success, merged, folders_merged) = BookmarksManager::process_sync_payload(&mut bookmarks, extension_bookmarks);
+        let data = bookmarks.clone();
+        (success, merged, folders_merged, data)
     };
-
-    let merged = BookmarksManager::merge_bookmarks(&mut bookmarks, incoming_bookmarks);
-    if !incoming_folders.is_empty() {
-        BookmarksManager::merge_folders(&mut bookmarks, incoming_folders);
-    }
-
-    let success = BookmarksManager::save_bookmarks(&mut bookmarks);
-    let bookmarks_data = bookmarks.clone();
-    drop(bookmarks);
 
     state.update_sync_complete(success, if success { None } else { Some("Failed to save bookmarks".to_string()) });
 
@@ -64,15 +49,26 @@ pub fn sync_bookmarks(state: State<SharedState>, extension_bookmarks: Vec<Value>
     let message = json!({
         "type": "bookmarks_updated",
         "payload": {
-            "bookmarks": merged
+            "bookmarks": &merged
         }
     }).to_string();
     state.broadcast_message(&message);
 
+    if !folders_merged.is_empty() {
+        let folders_msg = json!({
+            "type": "folders_updated",
+            "payload": {
+                "folders": &folders_merged
+            }
+        }).to_string();
+        state.broadcast_message(&folders_msg);
+    }
+
     // Émettre vers le frontend React
     state.emit_to_frontend("bookmarks_updated", &bookmarks_data);
 
-    merged
+    // Convert to Vec<Value> for return type
+    merged.into_iter().map(|b| serde_json::to_value(b).unwrap_or(Value::Null)).collect()
 }
 
 #[tauri::command]

@@ -5,7 +5,7 @@ mod bookmarks;
 use std::fs::File;
 use simplelog::{WriteLogger, LevelFilter, Config as LogConfig};
 use serde_json::{json, Value};
-use log::{info, error, warn};
+use log::{info, warn};
 use crate::config::ConfigManager;
 use crate::bookmarks::BookmarksManager;
 

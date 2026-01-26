@@ -15,7 +15,12 @@
       "Bash(bun run tsc:*)",
       "Bash(bun run tauri dev:*)",
       "Bash(taskkill:*)",
-      "Bash(netstat:*)"
+      "Bash(netstat:*)",
+      "Bash(cargo test:*)",
+      "Bash(bun run build)",
+      "Bash(bun run type-check:*)",
+      "Bash(bun tsc:*)",
+      "Bash(npx tsc:*)"
     ]
   }
 }

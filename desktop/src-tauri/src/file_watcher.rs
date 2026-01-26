@@ -86,11 +86,11 @@ async fn handle_bookmarks_change(state: &SharedState) {
     };
 
     // Broadcast to connected clients (extensions)
+    // Format cohérent avec commands.rs (sans champ source additionnel)
     let message = json!({
         "type": "bookmarks_updated",
         "payload": {
-            "bookmarks": new_bookmarks.bookmarks,
-            "source": "file_change"
+            "bookmarks": new_bookmarks.bookmarks
         }
     });
     state.broadcast_message(&message.to_string());

@@ -1,5 +1,5 @@
 use std::fs;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use log::{error, info, warn};
@@ -103,7 +103,7 @@ impl BookmarksManager {
     }
 
     pub fn merge_bookmarks(local_data: &mut BookmarksData, extension_bookmarks: Vec<Value>) -> Vec<Value> {
-        let mut merged_map: HashMap<String, Value> = HashMap::new();
+        let mut merged_map: BTreeMap<String, Value> = BTreeMap::new();
 
         // Helper to extract URL
         let get_url = |b: &Value| -> Option<String> {

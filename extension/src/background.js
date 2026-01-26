@@ -82,13 +82,25 @@ function scheduleReconnect() {
 
 function sendWebSocketMessage(message) {
   if (websocket && websocket.readyState === WebSocket.OPEN) {
-    websocket.send(JSON.stringify(message));
-    return true;
+    try {
+      websocket.send(JSON.stringify(message));
+      return true;
+    } catch (e) {
+      console.error("Erreur envoi message WebSocket:", e, "Message:", message.type);
+      return false;
+    }
   }
+  console.warn("WebSocket non disponible pour message:", message.type);
   return false;
 }
 
 function handleWebSocketMessage(message) {
+  // Valider le message avant de le traiter
+  if (!isValidWebSocketMessage(message)) {
+    console.warn("Message WebSocket invalide ou non autorisé:", message);
+    return;
+  }
+
   console.log("Message reçu du desktop:", message.type);
 
   switch (message.type) {
@@ -234,6 +246,68 @@ function sendMessageToNativeHost(message) {
 }
 
 // ==================== Bookmark Sync Logic ====================
+
+// Types de messages WebSocket autorisés (pour validation)
+const ALLOWED_WS_TYPES = new Set([
+  "connected",
+  "pong",
+  "sync_request",
+  "sync_complete",
+  "bookmarks_updated",
+  "config_updated",
+  "folders_updated",
+  "create_folder",
+  "status"
+]);
+
+/**
+ * Valide un message WebSocket entrant
+ */
+function isValidWebSocketMessage(msg) {
+  if (!msg || typeof msg !== "object") return false;
+  if (typeof msg.type !== "string") return false;
+  if (!ALLOWED_WS_TYPES.has(msg.type)) return false;
+
+  // Valider la structure du payload selon le type
+  if (msg.payload != null && typeof msg.payload !== "object") return false;
+
+  // Validations spécifiques par type
+  if (msg.type === "bookmarks_updated" || msg.type === "sync_complete") {
+    if (msg.payload && !Array.isArray(msg.payload.bookmarks)) return false;
+  }
+  if (msg.type === "folders_updated") {
+    if (msg.payload && !Array.isArray(msg.payload.folders)) return false;
+  }
+  if (msg.type === "create_folder") {
+    if (!msg.payload || typeof msg.payload.title !== "string") return false;
+  }
+
+  return true;
+}
+
+/**
+ * Supprime tous les favoris du navigateur (sauf les dossiers racines)
+ * Utilisé pour la synchronisation en "format arbre Chrome"
+ */
+async function clearAllBookmarks() {
+  const roots = await chrome.bookmarks.getTree();
+  const root = roots[0];
+  const topFolders = root.children || [];
+
+  // Parcourir les dossiers racines (Bookmarks Bar, Other Bookmarks, Mobile Bookmarks)
+  for (const folder of topFolders) {
+    if (!folder.id || !folder.children) continue;
+
+    // Supprimer tous les enfants de chaque dossier racine
+    for (const child of folder.children) {
+      try {
+        await chrome.bookmarks.removeTree(child.id);
+      } catch (e) {
+        console.error("Erreur suppression favori:", child.id, e);
+      }
+    }
+  }
+}
 
 async function performSync() {
   try {
@@ -576,16 +650,36 @@ chrome.bookmarks.onChanged.addListener(async (id, changeInfo) => {
   }
 });
 
-chrome.bookmarks.onMoved.addListener((id, moveInfo) => {
+chrome.bookmarks.onMoved.addListener(async (id, moveInfo) => {
   if (isUpdatingFromDesktop) return; // Ignorer si mise à jour depuis desktop
-  console.log("Favori déplacé:", id);
+  console.log("Favori/Dossier déplacé:", id, moveInfo);
 
-  // For moves, we do a full sync after debounce
-  debounceBookmarkChange(() => {
-    if (isWebSocketConnected) {
-      performSync().catch(e => console.error("Sync après déplacement échoué:", e));
+  // Envoyer uniquement les informations de déplacement (sync incrémentale)
+  if (isWebSocketConnected) {
+    try {
+      const [bookmark] = await chrome.bookmarks.get(id);
+      const isFolder = !bookmark.url;
+
+      sendWebSocketMessage({
+        type: isFolder ? "folder_changed" : "bookmark_changed",
+        payload: {
+          id,
+          title: bookmark.title,
+          url: bookmark.url,
+          parentId: moveInfo.parentId,
+          oldParentId: moveInfo.oldParentId,
+          index: moveInfo.index,
+          oldIndex: moveInfo.oldIndex
+        }
+      });
+    } catch (e) {
+      console.error("Erreur récupération favori déplacé:", e);
+      // Fallback: sync complète si erreur
+      debounceBookmarkChange(() => {
+        performSync().catch(err => console.error("Sync après déplacement échoué:", err));
+      });
     }
-  });
+  }
 });
 
 // ==================== Message Handlers ====================
