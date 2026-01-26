@@ -1,0 +1,20 @@
+{
+  "tasks": {
+    "current": 8
+  },
+  "debug": {
+    "current": 0
+  },
+  "resolver": {
+    "current": 0
+  },
+  "research": {
+    "current": 0
+  },
+  "rephrasing": {
+    "current": 1
+  },
+  "orchestrator": {
+    "current": 0
+  }
+}
