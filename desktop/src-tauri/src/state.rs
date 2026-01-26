@@ -1,6 +1,7 @@
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
@@ -44,6 +45,8 @@ pub struct AppState {
     pub connected_clients: RwLock<HashMap<String, ConnectedClient>>,
     pub websocket_tx: RwLock<Option<tokio::sync::broadcast::Sender<String>>>,
     pub app_handle: RwLock<Option<AppHandle>>,
+    /// Flag pour ignorer le prochain changement de fichier (évite double notification)
+    pub skip_file_change: AtomicBool,
 }
 
 impl AppState {
@@ -58,7 +61,18 @@ impl AppState {
             connected_clients: RwLock::new(HashMap::new()),
             websocket_tx: RwLock::new(None),
             app_handle: RwLock::new(None),
+            skip_file_change: AtomicBool::new(false),
         }
+    }
+
+    /// Marque qu'une sauvegarde interne va avoir lieu (le file_watcher doit ignorer)
+    pub fn mark_internal_save(&self) {
+        self.skip_file_change.store(true, Ordering::SeqCst);
+    }
+
+    /// Vérifie et reset le flag de sauvegarde interne
+    pub fn should_skip_file_change(&self) -> bool {
+        self.skip_file_change.swap(false, Ordering::SeqCst)
     }
 
     pub fn set_app_handle(&self, handle: AppHandle) {

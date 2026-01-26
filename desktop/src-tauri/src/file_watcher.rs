@@ -53,6 +53,11 @@ pub async fn start_file_watcher(state: SharedState) {
 
         for path in &event.paths {
             if path == &bookmarks_path {
+                // Ignorer si c'est une sauvegarde interne (évite double notification)
+                if state.should_skip_file_change() {
+                    info!("Bookmarks file change ignored (internal save)");
+                    continue;
+                }
                 handle_bookmarks_change(&state).await;
             } else if path == &config_path {
                 handle_config_change(&state).await;

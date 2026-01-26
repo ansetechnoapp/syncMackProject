@@ -34,6 +34,8 @@ pub fn get_bookmarks(state: State<SharedState>) -> BookmarksData {
 #[tauri::command]
 pub fn sync_bookmarks(state: State<SharedState>, extension_bookmarks: Vec<Value>) -> Vec<Value> {
     state.set_sync_in_progress(true);
+    // Marquer qu'on fait une sauvegarde interne (évite double notification du file_watcher)
+    state.mark_internal_save();
 
     let mut bookmarks = state.bookmarks.write();
 
@@ -75,6 +77,8 @@ pub fn sync_bookmarks(state: State<SharedState>, extension_bookmarks: Vec<Value>
 
 #[tauri::command]
 pub fn add_bookmark(state: State<SharedState>, bookmark: Value) -> bool {
+    // Marquer qu'on fait une sauvegarde interne (évite double notification du file_watcher)
+    state.mark_internal_save();
     let mut bookmarks = state.bookmarks.write();
     let result = BookmarksManager::add_bookmark(&mut bookmarks, bookmark);
 
@@ -97,6 +101,8 @@ pub fn add_bookmark(state: State<SharedState>, bookmark: Value) -> bool {
 
 #[tauri::command]
 pub fn remove_bookmark(state: State<SharedState>, bookmark_id: String) -> bool {
+    // Marquer qu'on fait une sauvegarde interne (évite double notification du file_watcher)
+    state.mark_internal_save();
     let mut bookmarks = state.bookmarks.write();
     let result = BookmarksManager::remove_bookmark(&mut bookmarks, &bookmark_id);
 
@@ -119,6 +125,8 @@ pub fn remove_bookmark(state: State<SharedState>, bookmark_id: String) -> bool {
 
 #[tauri::command]
 pub fn update_bookmark(state: State<SharedState>, bookmark_id: String, bookmark: Value) -> bool {
+    // Marquer qu'on fait une sauvegarde interne (évite double notification du file_watcher)
+    state.mark_internal_save();
     let mut bookmarks = state.bookmarks.write();
     let result = BookmarksManager::update_bookmark(&mut bookmarks, &bookmark_id, bookmark);
 
@@ -172,6 +180,8 @@ pub fn get_bookmarks_tree(state: State<SharedState>) -> Value {
 
 #[tauri::command]
 pub fn add_folder(state: State<SharedState>, folder: Value) -> bool {
+    // Marquer qu'on fait une sauvegarde interne (évite double notification du file_watcher)
+    state.mark_internal_save();
     let mut folder_obj = folder.as_object().cloned().unwrap_or_default();
 
     // Desktop-created folders need a temporary ID so the extension can create the folder
@@ -223,6 +233,8 @@ pub fn add_folder(state: State<SharedState>, folder: Value) -> bool {
 
 #[tauri::command]
 pub fn remove_folder(state: State<SharedState>, folder_id: String) -> bool {
+    // Marquer qu'on fait une sauvegarde interne (évite double notification du file_watcher)
+    state.mark_internal_save();
     let mut bookmarks = state.bookmarks.write();
     let result = BookmarksManager::remove_folder(&mut bookmarks, &folder_id);
 
@@ -244,6 +256,8 @@ pub fn remove_folder(state: State<SharedState>, folder_id: String) -> bool {
 
 #[tauri::command]
 pub fn update_folder(state: State<SharedState>, folder_id: String, folder: Value) -> bool {
+    // Marquer qu'on fait une sauvegarde interne (évite double notification du file_watcher)
+    state.mark_internal_save();
     let mut bookmarks = state.bookmarks.write();
     let result = BookmarksManager::update_folder(&mut bookmarks, &folder_id, folder);
 

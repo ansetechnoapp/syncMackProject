@@ -13,7 +13,9 @@
       "Bash(/Users/kevin/Projects/syncMackProject/backend_rust/backend_wrapper.sh:*)",
       "Bash(cargo check:*)",
       "Bash(bun run tsc:*)",
-      "Bash(bun run tauri dev:*)"
+      "Bash(bun run tauri dev:*)",
+      "Bash(taskkill:*)",
+      "Bash(netstat:*)"
     ]
   }
 }
