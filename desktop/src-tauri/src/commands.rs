@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 use crate::state::{SharedState, SyncStatus, ConnectedClient};
 use crate::config::{Config, ConfigManager};
 use crate::bookmarks::{BookmarksData, BookmarksManager};
-use crate::workspace::{Workspace, WorkspaceSummary, WorkspaceAssignment, WorkspaceManager, WorkspaceConflict};
+use crate::workspace::{Workspace, WorkspaceSummary, WorkspaceAssignment, WorkspaceManager, WorkspaceConflict, BatchMoveOperation, BatchMoveResult};
 use uuid::Uuid;
 
 #[tauri::command]
@@ -633,4 +633,48 @@ pub fn update_bookmark_in_workspace(
         state.broadcast_message(&message);
     }
     Ok(true)
+}
+
+#[tauri::command]
+pub fn batch_move_items(
+    state: State<SharedState>,
+    operation: BatchMoveOperation
+) -> Result<BatchMoveResult, String> {
+    let result = WorkspaceManager::batch_move_items(operation.clone())?;
+    
+    if result.success {
+        // Notify changes
+        if let Ok(source) = WorkspaceManager::load_workspace(&operation.source_workspace_id) {
+            let message = json!({
+                "type": "bookmarks_updated",
+                "payload": {
+                    "workspaceId": source.id,
+                    "bookmarks": &source.bookmarks,
+                    "folders": &source.folders,
+                    "version": source.version,
+                    "source": "desktop"
+                }
+            }).to_string();
+            state.broadcast_message(&message);
+        }
+        
+        if let Ok(target) = WorkspaceManager::load_workspace(&operation.target_workspace_id) {
+            let message = json!({
+                "type": "bookmarks_updated",
+                "payload": {
+                    "workspaceId": target.id,
+                    "bookmarks": &target.bookmarks,
+                    "folders": &target.folders,
+                    "version": target.version,
+                    "source": "desktop"
+                }
+            }).to_string();
+            state.broadcast_message(&message);
+        }
+        
+        let workspaces = WorkspaceManager::list_workspaces();
+        state.emit_to_frontend("workspaces_updated", &workspaces);
+    }
+    
+    Ok(result)
 }

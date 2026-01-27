@@ -7,7 +7,8 @@ import {
   useSensors,
   PointerSensor,
   TouchSensor,
-  pointerWithin,
+  rectIntersection,
+  CollisionDetection,
 } from '@dnd-kit/core';
 import {
   getWorkspaces,
@@ -19,6 +20,9 @@ import {
   getConnectedClients,
   removeBookmarkFromWorkspace,
   addBookmarkToWorkspace,
+  batchMoveItems,
+  BatchMoveOperation,
+  ItemType,
   requestSyncFromExtensions,
   getSyncStatus,
   WorkspaceSummary,
@@ -29,7 +33,7 @@ import {
 import { listen } from '@tauri-apps/api/event';
 import { useSyncStatusUpdated } from "../hooks/useRealtimeEvents";
 import WorkspaceColumn from './WorkspaceColumn';
-import { BookmarkItem } from './BookmarkItem'; // For DragOverlay
+import { BookmarkItemContent } from './BookmarkItem'; // For DragOverlay
 
 export default function WorkspacesPanel() {
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
@@ -61,6 +65,22 @@ export default function WorkspacesPanel() {
     }),
     useSensor(TouchSensor)
   );
+
+  // Custom collision detection that prioritizes workspace droppables
+  const customCollisionDetection: CollisionDetection = (args) => {
+    const collisions = rectIntersection(args);
+
+    // Prioritize workspace droppables over bookmark items
+    const workspaceCollision = collisions.find(
+      (collision) => collision.data?.droppableContainer?.data?.current?.type === 'workspace'
+    );
+
+    if (workspaceCollision) {
+      return [workspaceCollision];
+    }
+
+    return collisions;
+  };
 
   // Load Data
   const loadData = async () => {
@@ -147,30 +167,46 @@ export default function WorkspacesPanel() {
     if (!over) return;
 
     const sourceWorkspaceId = active.data.current?.sourceWorkspaceId;
-    const destWorkspaceId = over.id as string; // WorkspaceColumn id is workspaceId
     const bookmarkData = active.data.current;
 
+    // Determine destination workspace ID
+    // If dropped on a workspace column, over.data.current.type === 'workspace'
+    // If dropped on another bookmark, we get the workspaceId from that bookmark's data
+    let destWorkspaceId: string | undefined;
+
+    if (over.data.current?.type === 'workspace') {
+        destWorkspaceId = over.data.current.workspaceId;
+    } else if (over.data.current?.sourceWorkspaceId) {
+        // Dropped on a bookmark - use that bookmark's workspace
+        destWorkspaceId = over.data.current.sourceWorkspaceId;
+    } else {
+        // Fallback: over.id might be the workspace ID directly
+        destWorkspaceId = over.id as string;
+    }
+
     // Check if moving to a different workspace
-    // Also ensure we are dropping onto a workspace column (check type if needed, but id should be enough)
     if (sourceWorkspaceId && destWorkspaceId && sourceWorkspaceId !== destWorkspaceId) {
-        // Prevent moving folders for now if complex
-        if (bookmarkData && bookmarkData.isFolder) {
-            // Optional: Show toast "Moving folders not supported yet"
-            console.warn("Moving folders between workspaces not fully supported yet");
-            return;
-        }
-
         try {
-            // 1. Add to destination
-            // Clean data: remove DnD specific props
-            if (bookmarkData) {
-                const { sourceWorkspaceId: _, sortable: __, type: ___, ...cleanBookmark } = bookmarkData;
-                
-                await addBookmarkToWorkspace(destWorkspaceId, cleanBookmark);
+            if (bookmarkData && bookmarkData.id) {
+                const operation: BatchMoveOperation = {
+                    sourceWorkspaceId,
+                    targetWorkspaceId: destWorkspaceId,
+                    operations: [{
+                        itemId: bookmarkData.id,
+                        itemType: bookmarkData.isFolder ? ItemType.Folder : ItemType.Bookmark,
+                        targetParentId: '1', // Root
+                        sourceParentId: bookmarkData.parentId
+                    }],
+                    preserveHierarchy: true
+                };
 
-                // 2. Remove from source
-                if (bookmarkData.id) {
-                    await removeBookmarkFromWorkspace(sourceWorkspaceId, bookmarkData.id);
+                const result = await batchMoveItems(operation);
+
+                if (!result.success) {
+                    setError(`Erreur déplacement: ${result.errors.join(', ')}`);
+                } else {
+                    // Refresh UI
+                    await loadData();
                 }
             }
 
@@ -241,11 +277,11 @@ export default function WorkspacesPanel() {
   if (loading && workspaces.length === 0) return <div className="loading">Chargement...</div>;
 
   return (
-    <DndContext 
-        sensors={sensors} 
+    <DndContext
+        sensors={sensors}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
-        collisionDetection={pointerWithin}
+        collisionDetection={customCollisionDetection}
     >
         <div className="workspaces-panel-kanban">
             {error && <div className="error-message">{error}</div>}
@@ -430,9 +466,9 @@ export default function WorkspacesPanel() {
             
             <DragOverlay>
                 {activeDragItem ? (
-                     <BookmarkItem 
-                        node={activeDragItem} 
-                        onEdit={() => {}} 
+                     <BookmarkItemContent
+                        node={activeDragItem}
+                        onEdit={() => {}}
                         onDelete={() => {}}
                         isCompact={true}
                      />

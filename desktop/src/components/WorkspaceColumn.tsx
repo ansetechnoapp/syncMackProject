@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useDroppable } from '@dnd-kit/core';
+import { listen } from '@tauri-apps/api/event';
 import { getWorkspaceTree, BookmarksTree, TreeNode } from '../hooks/useTauriCommands';
-import { useBookmarksUpdated } from '../hooks/useRealtimeEvents';
 import { BookmarkItem, BookmarkNode } from './BookmarkItem';
 
 interface WorkspaceColumnProps {
@@ -42,25 +42,52 @@ export default function WorkspaceColumn({
     }
   };
 
+  const loadDataCallback = useCallback(() => {
+    loadData();
+  }, [workspaceId]);
+
   useEffect(() => {
     loadData();
   }, [workspaceId]);
 
-  // Real-time updates
-  useBookmarksUpdated(() => {
-    loadData();
-  });
+  // Real-time updates - listen to workspaces_updated event
+  useEffect(() => {
+    let disposed = false;
+
+    const setup = async () => {
+      const unlisten = await listen('workspaces_updated', () => {
+        if (!disposed) {
+          loadDataCallback();
+        }
+      });
+
+      if (disposed) {
+        unlisten();
+        return;
+      }
+
+      return unlisten;
+    };
+
+    let unlistenFn: (() => void) | undefined;
+    setup().then((fn) => {
+      unlistenFn = fn;
+    });
+
+    return () => {
+      disposed = true;
+      unlistenFn?.();
+    };
+  }, [loadDataCallback]);
 
   // Flatten the tree for the column view
   const getAllBookmarks = (nodes: TreeNode[]): BookmarkNode[] => {
     let result: BookmarkNode[] = [];
     for (const node of nodes) {
-      if (!node.isFolder) {
-        // Ensure ID is present
-        if (node.id) {
-            result.push(node as BookmarkNode);
-        }
-      } else if (node.children) {
+      if (node.id) {
+        result.push(node as BookmarkNode);
+      }
+      if (node.isFolder && node.children) {
         result = [...result, ...getAllBookmarks(node.children)];
       }
     }

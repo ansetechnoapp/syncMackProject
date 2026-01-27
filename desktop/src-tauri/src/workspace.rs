@@ -9,6 +9,8 @@ use serde_json::Value;
 use crate::bookmarks::{Bookmark, Folder, BookmarksManager};
 use crate::config::ConfigManager;
 
+const MAX_BOOKMARKS_PER_WORKSPACE: usize = 5000;
+
 /// Représente un workspace de favoris
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -159,9 +161,213 @@ impl Default for WorkspacesIndex {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchMoveOperation {
+    pub source_workspace_id: String,
+    pub target_workspace_id: String,
+    pub operations: Vec<MoveOperation>,
+    pub preserve_hierarchy: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveOperation {
+    pub item_id: String,
+    pub item_type: ItemType,
+    pub source_parent_id: Option<String>,
+    pub target_parent_id: Option<String>,
+    pub target_position: Option<usize>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum ItemType {
+    Bookmark,
+    Folder,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchMoveResult {
+    pub success: bool,
+    pub moved_count: usize,
+    pub errors: Vec<String>,
+}
+
 pub struct WorkspaceManager;
 
 impl WorkspaceManager {
+    // ==================== Batch Operations ====================
+
+    pub fn batch_move_items(operation: BatchMoveOperation) -> Result<BatchMoveResult, String> {
+        let mut source_workspace = Self::load_workspace(&operation.source_workspace_id)?;
+        let mut target_workspace = Self::load_workspace(&operation.target_workspace_id)?;
+        
+        // Validate all operations first
+        Self::validate_batch_operations(&operation, &source_workspace, &target_workspace)?;
+        
+        // Create transaction backup
+        let backup = Self::create_transaction_backup(&source_workspace, &target_workspace)?;
+        
+        // Execute operations atomically
+        match Self::execute_batch_operations(&operation, &mut source_workspace, &mut target_workspace) {
+            Ok(result) => {
+                // Save both workspaces
+                Self::save_workspace(&source_workspace)?;
+                Self::save_workspace(&target_workspace)?;
+                
+                // Update index
+                let mut index = Self::load_index();
+                Self::update_index_summary(&mut index, &source_workspace);
+                Self::update_index_summary(&mut index, &target_workspace);
+                Self::save_index(&index)?;
+                
+                Ok(result)
+            }
+            Err(e) => {
+                // Rollback on failure
+                Self::restore_from_backup(backup)?;
+                Err(format!("Batch move failed: {}", e))
+            }
+        }
+    }
+
+    fn validate_batch_operations(
+        operation: &BatchMoveOperation,
+        source_workspace: &Workspace,
+        _target_workspace: &Workspace
+    ) -> Result<(), String> {
+        for op in &operation.operations {
+             match op.item_type {
+                ItemType::Bookmark => {
+                    if !source_workspace.bookmarks.iter().any(|b| b.id == op.item_id) {
+                         return Err(format!("Bookmark not found in source: {}", op.item_id));
+                    }
+                },
+                ItemType::Folder => {
+                    if !source_workspace.folders.iter().any(|f| f.id == op.item_id) {
+                         return Err(format!("Folder not found in source: {}", op.item_id));
+                    }
+                }
+             }
+        }
+        Ok(())
+    }
+
+    fn create_transaction_backup(source: &Workspace, target: &Workspace) -> Result<(Workspace, Workspace), String> {
+        Ok((source.clone(), target.clone()))
+    }
+
+    fn restore_from_backup(backup: (Workspace, Workspace)) -> Result<(), String> {
+        let (source, target) = backup;
+        Self::save_workspace(&source)?;
+        Self::save_workspace(&target)?;
+        Ok(())
+    }
+
+    fn execute_batch_operations(
+        operation: &BatchMoveOperation,
+        source: &mut Workspace,
+        target: &mut Workspace
+    ) -> Result<BatchMoveResult, String> {
+        let mut moved_count = 0;
+        let mut errors = Vec::new();
+
+        // 1. Collect items to move
+        let mut bookmarks_to_move: Vec<Bookmark> = Vec::new();
+        let mut folders_to_move: Vec<Folder> = Vec::new();
+        let mut bookmark_ids_to_remove: Vec<String> = Vec::new();
+        let mut folder_ids_to_remove: Vec<String> = Vec::new();
+
+        for op in &operation.operations {
+            match op.item_type {
+                ItemType::Bookmark => {
+                    if let Some(b) = source.bookmarks.iter().find(|b| b.id == op.item_id) {
+                        let mut new_b = b.clone();
+                        new_b.parent_id = op.target_parent_id.clone().unwrap_or("1".to_string());
+                        new_b.updated_at_lamport = 1; 
+                        bookmarks_to_move.push(new_b);
+                        bookmark_ids_to_remove.push(op.item_id.clone());
+                    } else {
+                        errors.push(format!("Bookmark not found: {}", op.item_id));
+                    }
+                },
+                ItemType::Folder => {
+                    if let Some(f) = source.folders.iter().find(|f| f.id == op.item_id) {
+                        // Move the folder itself
+                        let mut new_f = f.clone();
+                        new_f.parent_id = Some(op.target_parent_id.clone().unwrap_or("1".to_string()));
+                        new_f.updated_at_lamport = 1;
+                        folders_to_move.push(new_f);
+                        folder_ids_to_remove.push(op.item_id.clone());
+
+                        // Recursively find descendants if hierarchy preservation is requested
+                        if operation.preserve_hierarchy {
+                            let mut stack = vec![op.item_id.clone()];
+                            while let Some(parent_id) = stack.pop() {
+                                // Find children bookmarks
+                                for b in &source.bookmarks {
+                                    if b.parent_id == parent_id && !bookmark_ids_to_remove.contains(&b.id) {
+                                        let mut new_b = b.clone();
+                                        new_b.updated_at_lamport = 1;
+                                        bookmarks_to_move.push(new_b);
+                                        bookmark_ids_to_remove.push(b.id.clone());
+                                    }
+                                }
+                                // Find children folders
+                                for sub_f in &source.folders {
+                                    if sub_f.parent_id.as_deref() == Some(&parent_id) && !folder_ids_to_remove.contains(&sub_f.id) {
+                                        let mut new_sub_f = sub_f.clone();
+                                        new_sub_f.updated_at_lamport = 1;
+                                        folders_to_move.push(new_sub_f);
+                                        folder_ids_to_remove.push(sub_f.id.clone());
+                                        stack.push(sub_f.id.clone());
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        errors.push(format!("Folder not found: {}", op.item_id));
+                    }
+                }
+            }
+        }
+
+        // 2. Add to target
+        for b in bookmarks_to_move {
+            if let Some(pos) = target.bookmarks.iter().position(|x| x.id == b.id) {
+                target.bookmarks[pos] = b;
+            } else {
+                target.bookmarks.push(b);
+            }
+        }
+        for f in folders_to_move {
+            if let Some(pos) = target.folders.iter().position(|x| x.id == f.id) {
+                target.folders[pos] = f;
+            } else {
+                target.folders.push(f);
+            }
+        }
+
+        // 3. Remove from source
+        source.bookmarks.retain(|b| !bookmark_ids_to_remove.contains(&b.id));
+        source.folders.retain(|f| !folder_ids_to_remove.contains(&f.id));
+
+        moved_count = bookmark_ids_to_remove.len() + folder_ids_to_remove.len();
+
+        source.version += 1;
+        source.updated_at = Utc::now();
+        target.version += 1;
+        target.updated_at = Utc::now();
+
+        Ok(BatchMoveResult {
+            success: errors.is_empty(),
+            moved_count,
+            errors
+        })
+    }
+
     // ==================== Chemins ====================
 
     /// Retourne le chemin du dossier des workspaces
@@ -182,9 +388,20 @@ impl WorkspaceManager {
         ConfigManager::get_sync_dir().join("workspaces_index.json")
     }
 
+    fn validate_workspace_id(id: &str) -> Result<(), String> {
+        if Uuid::parse_str(id).is_ok() {
+            return Ok(());
+        }
+        if !id.is_empty() && id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+            return Ok(());
+        }
+        Err(format!("Invalid workspace ID: {}", id))
+    }
+
     /// Retourne le chemin d'un workspace spécifique
-    pub fn get_workspace_path(id: &str) -> std::path::PathBuf {
-        Self::get_workspaces_dir().join(format!("{}.json", id))
+    pub fn get_workspace_path(id: &str) -> Result<std::path::PathBuf, String> {
+        Self::validate_workspace_id(id)?;
+        Ok(Self::get_workspaces_dir().join(format!("{}.json", id)))
     }
 
     /// S'assure que le dossier des workspaces existe
@@ -295,7 +512,7 @@ impl WorkspaceManager {
 
     /// Charge un workspace par son ID
     pub fn load_workspace(id: &str) -> Result<Workspace, String> {
-        let path = Self::get_workspace_path(id);
+        let path = Self::get_workspace_path(id)?;
 
         if !path.exists() {
             return Err(format!("Workspace non trouvé: {}", id));
@@ -311,7 +528,7 @@ impl WorkspaceManager {
     /// Sauvegarde un workspace
     pub fn save_workspace(workspace: &Workspace) -> Result<(), String> {
         Self::ensure_workspaces_dir();
-        let path = Self::get_workspace_path(&workspace.id);
+        let path = Self::get_workspace_path(&workspace.id)?;
         let temp_path = path.with_extension("tmp");
         let bak_path = path.with_extension("bak");
 
@@ -366,7 +583,7 @@ impl WorkspaceManager {
 
     /// Supprime un workspace
     pub fn delete_workspace(id: &str) -> Result<(), String> {
-        let path = Self::get_workspace_path(id);
+        let path = Self::get_workspace_path(id)?;
 
         if path.exists() {
             fs::remove_file(&path)
@@ -613,6 +830,10 @@ impl WorkspaceManager {
     pub fn add_bookmark_to_workspace(workspace_id: &str, bookmark: Bookmark) -> Result<(), String> {
         let mut workspace = Self::load_workspace(workspace_id)?;
 
+        if workspace.bookmarks.len() >= MAX_BOOKMARKS_PER_WORKSPACE {
+            return Err(format!("Limite de favoris atteinte ({})", MAX_BOOKMARKS_PER_WORKSPACE));
+        }
+
         // Vérifier si le favori existe déjà
         let exists = workspace.bookmarks.iter().any(|b| {
             b.id == bookmark.id || (b.url == bookmark.url && b.parent_id == bookmark.parent_id)
@@ -692,6 +913,10 @@ impl WorkspaceManager {
         bookmarks: Vec<Bookmark>,
         folders: Vec<Folder>,
     ) -> Result<Workspace, String> {
+        if bookmarks.len() > MAX_BOOKMARKS_PER_WORKSPACE {
+            return Err(format!("Trop de favoris à synchroniser (max {})", MAX_BOOKMARKS_PER_WORKSPACE));
+        }
+
         let mut workspace = Self::load_workspace(workspace_id)?;
 
         let mut local_bookmarks_by_sync: HashMap<String, &Bookmark> = HashMap::new();
@@ -1130,7 +1355,9 @@ impl WorkspaceManager {
         Self::ensure_workspaces_dir();
         for ws_val in workspaces_val {
             if let Ok(ws) = serde_json::from_value::<Workspace>(ws_val) {
-                let _ = Self::save_workspace(&ws);
+                if let Err(e) = Self::save_workspace(&ws) {
+                    error!("Skipping invalid workspace in backup: {}", e);
+                }
             }
         }
 

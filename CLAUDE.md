@@ -24,6 +24,7 @@ SyncMark est une application de synchronisation de favoris entre navigateurs via
 │  │  - Dashboard, Settings, BookmarksList                  │ │
 │  │  - WorkspacesPanel (Gestion des environnements)        │ │
 │  │  - Communication via Tauri Commands                    │ │
+│  │  - **Note** : Le glisser-déposer entre workspaces est une des fonctionnalités les plus intéressantes de l'application.
 │  └────────────────────────────────────────────────────────┘ │
 └───────────────────────┬─────────────────────────────────────┘
                         │ WebSocket ws://localhost:9876

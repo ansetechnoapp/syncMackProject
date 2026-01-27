@@ -269,7 +269,7 @@ function handleWebSocketMessage(message) {
       break;
 
     case "config_updated":
-      console.log("Configuration mise à jour:", message.payload);
+      console.log("Configuration mise à jour");
       break;
 
     case "folders_updated":
@@ -449,7 +449,7 @@ function sendMessageToNativeHost(message) {
 
     port.onMessage.addListener((response) => {
       responseReceived = true;
-      console.log("Message reçu du programme compagnon:", response);
+      // console.log("Message reçu du programme compagnon:", response);
       if (response.status === "success") {
         resolve(response);
       } else {
@@ -1031,7 +1031,7 @@ chrome.bookmarks.onChanged.addListener(async (id, changeInfo) => {
     try {
       const [bookmark] = await chrome.bookmarks.get(id);
       const isFolder = !bookmark.url;
-      console.log(isFolder ? "Dossier modifié:" : "Favori modifié:", id, changeInfo);
+      console.log(isFolder ? "Dossier modifié:" : "Favori modifié:", id);
 
       const syncId = getOrCreateSyncIdForChromeId(currentWorkspace.id, id);
       const parentSyncId = bookmark.parentId ? getOrCreateSyncIdForChromeId(currentWorkspace.id, bookmark.parentId) : ROOT_BAR_SYNC_ID;

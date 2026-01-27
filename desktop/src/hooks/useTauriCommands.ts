@@ -137,6 +137,32 @@ export interface WorkspaceConflict {
   resolution?: string | null;
 }
 
+export enum ItemType {
+  Bookmark = "bookmark",
+  Folder = "folder",
+}
+
+export interface MoveOperation {
+  itemId: string;
+  itemType: ItemType;
+  sourceParentId?: string;
+  targetParentId?: string;
+  targetPosition?: number;
+}
+
+export interface BatchMoveOperation {
+  sourceWorkspaceId: string;
+  targetWorkspaceId: string;
+  operations: MoveOperation[];
+  preserveHierarchy: boolean;
+}
+
+export interface BatchMoveResult {
+  success: boolean;
+  movedCount: number;
+  errors: string[];
+}
+
 export interface WorkspaceAssignment {
   browser_id: string;
   browser_name: string;
@@ -309,4 +335,8 @@ export async function updateBookmarkInWorkspace(
     url: updates.url,
     parentId: updates.parentId,
   });
+}
+
+export async function batchMoveItems(operation: BatchMoveOperation): Promise<BatchMoveResult> {
+  return invokeWithTimeout<BatchMoveResult>("batch_move_items", { operation }, 30000);
 }

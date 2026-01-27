@@ -71,6 +71,7 @@ pub fn run() {
             add_bookmark_to_workspace,
             remove_bookmark_from_workspace,
             update_bookmark_in_workspace,
+            batch_move_items,
         ])
         .setup(move |app| {
             // Store AppHandle for event emission

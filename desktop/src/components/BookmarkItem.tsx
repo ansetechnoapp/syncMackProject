@@ -1,3 +1,4 @@
+import type { CSSProperties, ComponentPropsWithoutRef } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 
 export interface BookmarkNode {
@@ -17,6 +18,51 @@ interface BookmarkItemProps {
   isCompact?: boolean;
 }
 
+type BookmarkItemContentProps = {
+  node: BookmarkNode;
+  onEdit: (id: string) => void;
+  onDelete: (id: string) => void;
+  isCompact?: boolean;
+  style?: CSSProperties;
+  innerRef?: (node: HTMLDivElement | null) => void;
+} & Omit<ComponentPropsWithoutRef<'div'>, 'ref'>;
+
+export function BookmarkItemContent({ node, onEdit, onDelete, isCompact = false, style, innerRef, ...props }: BookmarkItemContentProps) {
+    if (node.isFolder) {
+        return (
+            <div 
+                ref={innerRef} 
+                className={`bookmark-item folder-item ${isCompact ? 'compact' : ''}`} 
+                style={style} 
+                {...props}
+            >
+                <span className="icon">📁</span>
+                <span className="title">{node.title}</span>
+            </div>
+        );
+    }
+    return (
+        <div 
+            ref={innerRef} 
+            className={`bookmark-item ${isCompact ? 'compact' : ''}`} 
+            style={style} 
+            {...props}
+        >
+            <BookmarkIcon url={node.url || ''} />
+            <div className="content">
+                <a href={node.url} target="_blank" rel="noopener noreferrer" className="title" onClick={e => e.stopPropagation()}>
+                    {node.title}
+                </a>
+                {!isCompact && <span className="url">{new URL(node.url || 'http://localhost').hostname}</span>}
+            </div>
+            <div className="actions">
+                <button onClick={(e) => { e.stopPropagation(); onEdit(node.id); }} className="btn-icon-small">✏️</button>
+                <button onClick={(e) => { e.stopPropagation(); onDelete(node.id); }} className="btn-icon-small text-danger">🗑️</button>
+            </div>
+        </div>
+    );
+}
+
 export function BookmarkItem({ node, workspaceId, onEdit, onDelete, isCompact = false }: BookmarkItemProps) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: node.id,
@@ -28,43 +74,17 @@ export function BookmarkItem({ node, workspaceId, onEdit, onDelete, isCompact = 
     cursor: 'grab',
   };
 
-  if (node.isFolder) {
-      // Folders in column view might just be containers or distinct items
-      // For now, render them simply
-      return (
-        <div 
-            ref={setNodeRef} 
-            className={`bookmark-item folder-item ${isCompact ? 'compact' : ''}`} 
-            style={style} 
-            {...listeners} 
-            {...attributes}
-        >
-            <span className="icon">📁</span>
-            <span className="title">{node.title}</span>
-        </div>
-      );
-  }
-
   return (
-    <div 
-        ref={setNodeRef} 
-        className={`bookmark-item ${isCompact ? 'compact' : ''}`} 
-        style={style} 
-        {...listeners} 
+      <BookmarkItemContent 
+        node={node}
+        onEdit={onEdit}
+        onDelete={onDelete}
+        isCompact={isCompact}
+        style={style}
+        innerRef={setNodeRef}
+        {...listeners}
         {...attributes}
-    >
-        <BookmarkIcon url={node.url || ''} />
-        <div className="content">
-            <a href={node.url} target="_blank" rel="noopener noreferrer" className="title" onClick={e => e.stopPropagation()}>
-                {node.title}
-            </a>
-            {!isCompact && <span className="url">{new URL(node.url || 'http://localhost').hostname}</span>}
-        </div>
-        <div className="actions">
-            <button onClick={(e) => { e.stopPropagation(); onEdit(node.id); }} className="btn-icon-small">✏️</button>
-            <button onClick={(e) => { e.stopPropagation(); onDelete(node.id); }} className="btn-icon-small text-danger">🗑️</button>
-        </div>
-    </div>
+      />
   );
 }
 

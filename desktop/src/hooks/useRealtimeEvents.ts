@@ -141,7 +141,7 @@ export function useClientsUpdated(callback: (clients: ConnectedClient[]) => void
 
     (async () => {
       const fn = await listen<ClientsUpdatedEvent>("clients_updated", (event) => {
-        console.log("Clients updated:", event.payload);
+        // console.log("Clients updated:", event.payload);
         callback(event.payload);
       });
 

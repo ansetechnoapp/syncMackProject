@@ -1093,11 +1093,14 @@ input:checked + .slider:before {
     flex: 1;
     padding: 10px;
     overflow-y: auto;
-    transition: background-color 0.2s;
+    transition: background-color 0.2s, border-color 0.2s;
+    min-height: 200px;
+    border: 2px dashed transparent;
 }
 
 .column-body.is-over {
-    background-color: rgba(52, 152, 219, 0.1);
+    background-color: rgba(52, 152, 219, 0.15);
+    border-color: var(--primary);
 }
 
 .empty-state-small {
@@ -1301,4 +1304,33 @@ input:checked + .slider:before {
     border-radius: 4px;
     color: var(--text-primary);
     margin-top: 4px;
+}
+
+/* Drag and Drop Enhancements */
+.bookmark-item.compact[data-dragging="true"] {
+    opacity: 0.4;
+}
+
+.workspace-column.dragging-over {
+    box-shadow: 0 0 0 2px var(--primary);
+}
+
+.btn-xs {
+    padding: 4px 8px;
+    font-size: 11px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-outline {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+}
+
+.btn-outline:hover {
+    background: var(--bg-input);
+    color: var(--text-primary);
+    border-color: var(--primary);
 }
