@@ -9,6 +9,99 @@ let pendingResponses = new Map();
 let messageId = 0;
 let isUpdatingFromDesktop = false; // Flag pour éviter les boucles infinies
 
+const ROOT_BAR_SYNC_ID = "root_bar";
+const UNASSIGNED_WORKSPACE_ID = "__unassigned__";
+const STORAGE_KEYS = {
+  browserInstanceId: "syncmark.browserInstanceId",
+  currentWorkspace: "syncmark.currentWorkspace",
+  workspaceStatePrefix: "syncmark.workspaceState.",
+};
+
+let browserInstanceId = null;
+let workspaceState = {
+  chromeToSync: new Map(),
+  syncToChrome: new Map(),
+  lamportBySync: new Map(),
+};
+
+// ==================== État des Workspaces ====================
+let currentWorkspace = null;  // { id, name, version }
+let availableWorkspaces = [];
+let isWorkspaceSwitching = false;
+
+function storageGet(keys) {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(keys, (result) => resolve(result || {}));
+  });
+}
+
+function storageSet(obj) {
+  return new Promise((resolve) => {
+    chrome.storage.local.set(obj, () => resolve());
+  });
+}
+
+async function getOrCreateBrowserInstanceId() {
+  const existing = await storageGet([STORAGE_KEYS.browserInstanceId]);
+  const current = existing[STORAGE_KEYS.browserInstanceId];
+  if (typeof current === "string" && current.length > 0) {
+    return current;
+  }
+  const id = crypto.randomUUID();
+  await storageSet({ [STORAGE_KEYS.browserInstanceId]: id });
+  return id;
+}
+
+function workspaceStateKey(workspaceId) {
+  return `${STORAGE_KEYS.workspaceStatePrefix}${workspaceId}`;
+}
+
+async function loadWorkspaceState(workspaceId) {
+  if (!workspaceId) {
+    workspaceState = { chromeToSync: new Map(), syncToChrome: new Map(), lamportBySync: new Map() };
+    return;
+  }
+
+  const data = await storageGet([workspaceStateKey(workspaceId)]);
+  const raw = data[workspaceStateKey(workspaceId)] || {};
+  const chromeToSync = new Map(Object.entries(raw.chromeToSync || {}));
+  const syncToChrome = new Map(Object.entries(raw.syncToChrome || {}));
+  const lamportBySync = new Map(Object.entries(raw.lamportBySync || {}).map(([k, v]) => [k, Number(v) || 0]));
+
+  chromeToSync.set("1", ROOT_BAR_SYNC_ID);
+  syncToChrome.set(ROOT_BAR_SYNC_ID, "1");
+
+  workspaceState = { chromeToSync, syncToChrome, lamportBySync };
+}
+
+async function persistWorkspaceState(workspaceId) {
+  if (!workspaceId) return;
+  const chromeToSync = Object.fromEntries(workspaceState.chromeToSync.entries());
+  const syncToChrome = Object.fromEntries(workspaceState.syncToChrome.entries());
+  const lamportBySync = Object.fromEntries(workspaceState.lamportBySync.entries());
+  await storageSet({
+    [workspaceStateKey(workspaceId)]: { chromeToSync, syncToChrome, lamportBySync },
+  });
+}
+
+function getOrCreateSyncIdForChromeId(workspaceId, chromeId) {
+  if (chromeId === "1") return ROOT_BAR_SYNC_ID;
+  const existing = workspaceState.chromeToSync.get(chromeId);
+  if (existing) return existing;
+  const sid = crypto.randomUUID();
+  workspaceState.chromeToSync.set(chromeId, sid);
+  workspaceState.syncToChrome.set(sid, chromeId);
+  if (!workspaceState.lamportBySync.has(sid)) workspaceState.lamportBySync.set(sid, 0);
+  persistWorkspaceState(workspaceId).catch(() => {});
+  return sid;
+}
+
+function getChromeIdForSyncId(workspaceId, syncId) {
+  if (syncId === ROOT_BAR_SYNC_ID) return "1";
+  const existing = workspaceState.syncToChrome.get(syncId);
+  return existing || null;
+}
+
 // ==================== WebSocket Communication ====================
 
 function connectWebSocket() {
@@ -21,22 +114,35 @@ function connectWebSocket() {
   try {
     websocket = new WebSocket(WEBSOCKET_URL);
 
-    websocket.onopen = () => {
+    websocket.onopen = async () => {
       console.log("WebSocket connecté");
       isWebSocketConnected = true;
       clearTimeout(reconnectTimeout);
 
-      // Identify ourselves to the desktop app
+      // Assurer que l'ID d'instance est chargé
+      if (!browserInstanceId) {
+        browserInstanceId = await getOrCreateBrowserInstanceId();
+      }
+
+      // Identify ourselves to the desktop app avec l'ID du workspace actuel
+      const detectedBrowser = await getBrowserName();
+      console.log("Navigateur détecté:", detectedBrowser);
       sendWebSocketMessage({
         type: "identify",
         payload: {
-          browser: getBrowserName(),
-          extensionId: chrome.runtime.id
+          browser: detectedBrowser,
+          extensionId: chrome.runtime.id,
+          browserInstanceId: browserInstanceId,
+          currentWorkspaceId: currentWorkspace?.id || null
         }
       });
 
       // Broadcast connection status to popup
-      chrome.runtime.sendMessage({ type: "connection_status", connected: true }).catch(() => {});
+      chrome.runtime.sendMessage({
+        type: "connection_status",
+        connected: true,
+        workspace: currentWorkspace
+      }).catch(() => {});
     };
 
     websocket.onmessage = (event) => {
@@ -114,6 +220,7 @@ function handleWebSocketMessage(message) {
 
     case "sync_request":
       // Desktop app is requesting a sync
+      console.log("Sync demandé, raison:", message.payload?.reason);
       performSync().then(result => {
         console.log("Sync demandé par desktop:", result ? "succès" : "échec");
       });
@@ -121,20 +228,43 @@ function handleWebSocketMessage(message) {
 
     case "sync_complete":
       // Sync operation completed
-      if (message.payload && message.payload.bookmarks) {
-        updateBookmarksFromNative(message.payload.bookmarks).catch(e => {
-          console.error("Erreur mise à jour favoris:", e);
-        });
+      if (message.payload) {
+        // Mettre à jour le workspace si présent
+        if (message.payload.workspaceId) {
+          currentWorkspace = {
+            id: message.payload.workspaceId,
+            name: currentWorkspace?.name || "Workspace",
+            version: message.payload.version || 1
+          };
+          storageSet({ [STORAGE_KEYS.currentWorkspace]: currentWorkspace }).catch(() => {});
+          loadWorkspaceState(currentWorkspace.id).catch(() => {});
+        }
+        if (message.payload.bookmarks && currentWorkspace && message.payload.workspaceId === currentWorkspace.id) {
+          switchToWorkspaceSnapshot(currentWorkspace.id, message.payload.bookmarks, message.payload.folders || [], message.payload.version || 1)
+            .catch(e => console.error("Erreur mise à jour favoris:", e));
+        }
       }
       break;
 
     case "bookmarks_updated":
       // Bookmarks were updated from desktop app
       console.log("Favoris mis à jour depuis le desktop");
-      if (message.payload && message.payload.bookmarks) {
-        updateBookmarksFromNative(message.payload.bookmarks).catch(e => {
-          console.error("Erreur mise à jour favoris depuis desktop:", e);
-        });
+      if (message.payload) {
+        // Vérifier si c'est pour notre workspace
+        if (message.payload.workspaceId && currentWorkspace) {
+          if (message.payload.workspaceId !== currentWorkspace.id) {
+            console.log("Ignoré: mise à jour pour un autre workspace");
+            break;
+          }
+          // Mettre à jour la version
+          if (message.payload.version) {
+            currentWorkspace.version = message.payload.version;
+          }
+        }
+        if (message.payload.bookmarks && currentWorkspace) {
+          switchToWorkspaceSnapshot(currentWorkspace.id, message.payload.bookmarks, message.payload.folders || [], message.payload.version || currentWorkspace.version || 1)
+            .catch(e => console.error("Erreur mise à jour favoris depuis desktop:", e));
+        }
       }
       break;
 
@@ -159,6 +289,65 @@ function handleWebSocketMessage(message) {
           console.error("Erreur création dossier depuis desktop:", e);
         });
       }
+      break;
+
+    case "workspace_switched":
+      // Desktop nous demande de charger un nouveau workspace
+      if (message.payload) {
+        if (message.payload.targetBrowserInstanceId && message.payload.targetBrowserInstanceId !== browserInstanceId) {
+          break;
+        }
+        console.log("Switch vers workspace:", message.payload.workspaceName);
+        const previous = currentWorkspace;
+
+        if (previous && previous.id && previous.id !== message.payload.workspaceId) {
+          performSyncForWorkspaceId(previous.id).catch(() => {});
+        }
+
+        currentWorkspace = {
+          id: message.payload.workspaceId,
+          name: message.payload.workspaceName,
+          version: message.payload.version || 1
+        };
+
+        storageSet({ [STORAGE_KEYS.currentWorkspace]: currentWorkspace }).catch(() => {});
+
+        isWorkspaceSwitching = true;
+
+        (message.payload.created ? migrateUnassignedStateToWorkspace(currentWorkspace.id) : Promise.resolve())
+          .then(() => switchToWorkspaceSnapshot(currentWorkspace.id, message.payload.bookmarks || [], message.payload.folders || [], currentWorkspace.version))
+          .then(async () => {
+            await loadWorkspaceState(currentWorkspace.id);
+            console.log("Switch workspace terminé");
+            isWorkspaceSwitching = false;
+            chrome.runtime.sendMessage({
+              type: "workspace_changed",
+              workspace: currentWorkspace,
+              created: message.payload.created || false
+            }).catch(() => {});
+          })
+          .catch(e => {
+            console.error("Erreur switch workspace:", e);
+            isWorkspaceSwitching = false;
+          });
+      }
+      break;
+
+    case "workspaces_list":
+      // Liste des workspaces disponibles
+      if (message.payload && message.payload.workspaces) {
+        availableWorkspaces = message.payload.workspaces;
+        console.log("Workspaces disponibles:", availableWorkspaces.length);
+        // Notifier le popup
+        chrome.runtime.sendMessage({
+          type: "workspaces_updated",
+          workspaces: availableWorkspaces
+        }).catch(() => {});
+      }
+      break;
+
+    case "error":
+      console.error("Erreur du serveur:", message.payload?.message);
       break;
 
     case "status":
@@ -199,16 +388,54 @@ async function createFolderFromDesktop(payload) {
   }
 }
 
-function getBrowserName() {
-  const userAgent = navigator.userAgent;
-  if (userAgent.includes("Edg/")) return "Microsoft Edge";
-  if (userAgent.includes("OPR/") || userAgent.includes("Opera")) return "Opera";
-  if (userAgent.includes("Brave")) return "Brave";
-  if (userAgent.includes("Vivaldi")) return "Vivaldi";
-  if (userAgent.includes("Chrome")) return "Google Chrome";
-  if (userAgent.includes("Firefox")) return "Firefox";
-  if (userAgent.includes("Safari")) return "Safari";
-  return "Unknown Browser";
+async function getBrowserName() {
+  // Méthode 1: Utiliser getHighEntropyValues (plus fiable dans les Service Workers)
+  if (navigator.userAgentData && typeof navigator.userAgentData.getHighEntropyValues === 'function') {
+    try {
+      const hints = await navigator.userAgentData.getHighEntropyValues(['fullVersionList', 'platform']);
+      const brands = hints.fullVersionList || navigator.userAgentData.brands || [];
+
+      // Ordre de priorité pour la détection (du plus spécifique au plus générique)
+      for (const brand of brands) {
+        const name = brand.brand || '';
+        if (name === 'Brave') return 'Brave';
+        if (name === 'Microsoft Edge') return 'Microsoft Edge';
+        if (name === 'Opera') return 'Opera';
+        if (name === 'Vivaldi') return 'Vivaldi';
+      }
+      // Vérifier Chrome en dernier (car il apparaît souvent avec d'autres navigateurs Chromium)
+      for (const brand of brands) {
+        const name = brand.brand || '';
+        if (name === 'Google Chrome') return 'Google Chrome';
+        if (name === 'Chromium') return 'Chromium';
+      }
+    } catch (e) {
+      console.warn('getHighEntropyValues failed:', e);
+    }
+  }
+
+  // Méthode 2: Fallback sur brands synchrone
+  if (navigator.userAgentData && navigator.userAgentData.brands) {
+    const brands = navigator.userAgentData.brands;
+    if (brands.some(b => b.brand === 'Brave')) return 'Brave';
+    if (brands.some(b => b.brand === 'Microsoft Edge')) return 'Microsoft Edge';
+    if (brands.some(b => b.brand === 'Opera')) return 'Opera';
+    if (brands.some(b => b.brand === 'Vivaldi')) return 'Vivaldi';
+    if (brands.some(b => b.brand === 'Google Chrome')) return 'Google Chrome';
+    if (brands.some(b => b.brand === 'Chromium')) return 'Chromium';
+  }
+
+  // Méthode 3: Fallback sur userAgent (moins fiable mais toujours utile)
+  const userAgent = navigator.userAgent || '';
+  if (userAgent.includes('Edg/')) return 'Microsoft Edge';
+  if (userAgent.includes('OPR/') || userAgent.includes('Opera')) return 'Opera';
+  if (userAgent.includes('Brave')) return 'Brave';
+  if (userAgent.includes('Vivaldi')) return 'Vivaldi';
+  if (userAgent.includes('Chrome')) return 'Google Chrome';
+  if (userAgent.includes('Firefox')) return 'Firefox';
+  if (userAgent.includes('Safari')) return 'Safari';
+
+  return 'Unknown Browser';
 }
 
 // ==================== Native Messaging (Fallback) ====================
@@ -257,7 +484,11 @@ const ALLOWED_WS_TYPES = new Set([
   "config_updated",
   "folders_updated",
   "create_folder",
-  "status"
+  "status",
+  // Nouveaux messages pour les workspaces
+  "workspace_switched",
+  "workspaces_list",
+  "error"
 ]);
 
 /**
@@ -290,34 +521,120 @@ function isValidWebSocketMessage(msg) {
  * Utilisé pour la synchronisation en "format arbre Chrome"
  */
 async function clearAllBookmarks() {
-  const roots = await chrome.bookmarks.getTree();
-  const root = roots[0];
-  const topFolders = root.children || [];
-
-  // Parcourir les dossiers racines (Bookmarks Bar, Other Bookmarks, Mobile Bookmarks)
-  for (const folder of topFolders) {
-    if (!folder.id || !folder.children) continue;
-
-    // Supprimer tous les enfants de chaque dossier racine
-    for (const child of folder.children) {
-      try {
-        await chrome.bookmarks.removeTree(child.id);
-      } catch (e) {
-        console.error("Erreur suppression favori:", child.id, e);
-      }
+  const [bar] = await chrome.bookmarks.getSubTree("1");
+  const children = (bar && bar.children) ? bar.children : [];
+  for (const child of children) {
+    try {
+      await chrome.bookmarks.removeTree(child.id);
+    } catch (e) {
+      console.error("Erreur suppression favori:", child.id, e);
     }
   }
 }
 
+/**
+ * Remplace tous les favoris du navigateur par ceux d'un workspace
+ * Utilisé lors du switch de workspace
+ */
+async function replaceAllBookmarks(workspaceId, bookmarks, folders) {
+  isUpdatingFromDesktop = true;
+
+  try {
+    workspaceState.chromeToSync = new Map([ ["1", ROOT_BAR_SYNC_ID] ]);
+    workspaceState.syncToChrome = new Map([ [ROOT_BAR_SYNC_ID, "1"] ]);
+
+    // 1. Supprimer tous les favoris actuels
+    await clearAllBookmarks();
+
+    // 2. Créer d'abord les dossiers (pour avoir les bons parentIds)
+    const folderIdMap = new Map(); // ancienId -> nouveauId
+
+    // Trier les dossiers par niveau de profondeur (parents d'abord)
+    const sortedFolders = (folders || []).filter(f => {
+      if (f.deleted) return false;
+      const syncId = f.syncId || f.sync_id || f.id;
+      return syncId !== ROOT_BAR_SYNC_ID;
+    }).sort((a, b) => {
+      const depthA = getParentDepth(a.parentId, folders);
+      const depthB = getParentDepth(b.parentId, folders);
+      return depthA - depthB;
+    });
+
+    for (const folder of sortedFolders) {
+      // Déterminer le parent (root "1" par défaut si parentId Chrome root)
+      const parentSyncId = folder.parentId || ROOT_BAR_SYNC_ID;
+      const parentChromeId = getChromeIdForSyncId(workspaceId, parentSyncId) || "1";
+
+      try {
+        const created = await chrome.bookmarks.create({
+          parentId: parentChromeId,
+          title: folder.title
+        });
+        const syncId = folder.syncId || folder.sync_id || folder.id;
+        workspaceState.chromeToSync.set(created.id, syncId);
+        workspaceState.syncToChrome.set(syncId, created.id);
+        folderIdMap.set(syncId, created.id);
+        const lamport = Number(folder.updatedAtLamport || folder.updated_at_lamport || 0);
+        workspaceState.lamportBySync.set(syncId, lamport);
+      } catch (e) {
+        console.error("Erreur création dossier:", folder.title, e);
+      }
+    }
+
+    // 3. Créer les favoris
+    for (const bookmark of (bookmarks || []).filter(b => !b.deleted)) {
+      if (!bookmark.url) continue;
+
+      // Déterminer le parent
+      const parentSyncId = bookmark.parentId || ROOT_BAR_SYNC_ID;
+      const parentChromeId = folderIdMap.get(parentSyncId) || getChromeIdForSyncId(workspaceId, parentSyncId) || "1";
+
+      try {
+        const created = await chrome.bookmarks.create({
+          parentId: parentChromeId,
+          title: bookmark.title || bookmark.url,
+          url: bookmark.url
+        });
+        const syncId = bookmark.syncId || bookmark.sync_id || bookmark.id;
+        workspaceState.chromeToSync.set(created.id, syncId);
+        workspaceState.syncToChrome.set(syncId, created.id);
+        const lamport = Number(bookmark.updatedAtLamport || bookmark.updated_at_lamport || 0);
+        workspaceState.lamportBySync.set(syncId, lamport);
+      } catch (e) {
+        console.error("Erreur création favori:", bookmark.title, e);
+      }
+    }
+
+    await persistWorkspaceState(workspaceId);
+
+    console.log(`Workspace chargé: ${bookmarks?.length || 0} favoris, ${folders?.length || 0} dossiers`);
+  } finally {
+    isUpdatingFromDesktop = false;
+  }
+}
+
+/**
+ * Calcule la profondeur d'un dossier dans la hiérarchie
+ */
+function getParentDepth(parentId, folders) {
+  if (!parentId || parentId === "root" || parentId === ROOT_BAR_SYNC_ID || ["0", "1", "2"].includes(parentId)) return 0;
+  const parent = folders.find(f => f.id === parentId);
+  if (!parent) return 0;
+  return 1 + getParentDepth(parent.parentId, folders);
+}
+
 async function performSync() {
   try {
-    const bookmarkTree = await chrome.bookmarks.getTree();
+    const wsId = currentWorkspace?.id || UNASSIGNED_WORKSPACE_ID;
+    await loadWorkspaceState(wsId);
+    const [bar] = await chrome.bookmarks.getSubTree("1");
+    const treeWithSync = await injectSyncIdsIntoTree(wsId, bar, ROOT_BAR_SYNC_ID);
 
     // Try WebSocket first
     if (isWebSocketConnected) {
       sendWebSocketMessage({
         type: "sync_bookmarks",
-        payload: { bookmarks: bookmarkTree }
+        payload: currentWorkspace ? { workspaceId: currentWorkspace.id, bookmarks: [treeWithSync] } : { bookmarks: [treeWithSync] }
       });
       return true;
     }
@@ -326,7 +643,7 @@ async function performSync() {
     console.log("WebSocket non disponible, utilisation de Native Messaging...");
     const response = await sendMessageToNativeHost({
       type: "sync_bookmarks",
-      bookmarks: bookmarkTree
+      bookmarks: [treeWithSync]
     });
 
     if (response.status === "success" && response.bookmarks) {
@@ -337,6 +654,77 @@ async function performSync() {
   } catch (error) {
     console.error("Erreur sync:", error);
     throw error;
+  }
+}
+
+async function injectSyncIdsIntoTree(workspaceId, node, forcedSyncId) {
+  const syncId = forcedSyncId || getOrCreateSyncIdForChromeId(workspaceId, node.id);
+  const lamport = workspaceState.lamportBySync.get(syncId) || 0;
+  const parentSync = forcedSyncId ? "root" : (node.parentId ? getOrCreateSyncIdForChromeId(workspaceId, node.parentId) : "root");
+  const out = {
+    id: syncId,
+    syncId,
+    title: node.title,
+    url: node.url,
+    parentId: parentSync,
+    dateAdded: node.dateAdded,
+    updatedAtLamport: lamport,
+    updatedBy: browserInstanceId || "",
+  };
+  if (node.children && node.children.length > 0) {
+    out.children = [];
+    for (const child of node.children) {
+      const childParentSyncId = syncId;
+      const childObj = await injectSyncIdsIntoTree(workspaceId, child, null);
+      childObj.parentId = childParentSyncId;
+      out.children.push(childObj);
+    }
+  }
+  return out;
+}
+
+async function performSyncForWorkspaceId(workspaceId) {
+  if (!workspaceId) return false;
+  await loadWorkspaceState(workspaceId);
+  const [bar] = await chrome.bookmarks.getSubTree("1");
+  const treeWithSync = await injectSyncIdsIntoTree(workspaceId, bar, ROOT_BAR_SYNC_ID);
+  if (isWebSocketConnected) {
+    sendWebSocketMessage({
+      type: "sync_bookmarks",
+      payload: { workspaceId, bookmarks: [treeWithSync] }
+    });
+    return true;
+  }
+  return false;
+}
+
+async function migrateUnassignedStateToWorkspace(workspaceId) {
+  const raw = await storageGet([workspaceStateKey(UNASSIGNED_WORKSPACE_ID)]);
+  const stateObj = raw[workspaceStateKey(UNASSIGNED_WORKSPACE_ID)];
+  if (!stateObj || typeof stateObj !== "object") return;
+  await storageSet({ [workspaceStateKey(workspaceId)]: stateObj });
+  await new Promise((resolve) => chrome.storage.local.remove([workspaceStateKey(UNASSIGNED_WORKSPACE_ID)], () => resolve()));
+}
+
+async function switchToWorkspaceSnapshot(workspaceId, bookmarks, folders, version) {
+  await loadWorkspaceState(workspaceId);
+
+  for (const f of folders || []) {
+    const syncId = f.syncId || f.sync_id || f.id;
+    if (syncId) {
+      workspaceState.lamportBySync.set(syncId, Number(f.updatedAtLamport || f.updated_at_lamport || 0));
+    }
+  }
+  for (const b of bookmarks || []) {
+    const syncId = b.syncId || b.sync_id || b.id;
+    if (syncId) {
+      workspaceState.lamportBySync.set(syncId, Number(b.updatedAtLamport || b.updated_at_lamport || 0));
+    }
+  }
+
+  await replaceAllBookmarks(workspaceId, bookmarks, folders);
+  if (currentWorkspace) {
+    currentWorkspace.version = version;
   }
 }
 
@@ -591,20 +979,26 @@ function debounceBookmarkChange(callback, delay = 1000) {
 
 chrome.bookmarks.onCreated.addListener((id, bookmark) => {
   if (isUpdatingFromDesktop) return; // Ignorer si mise à jour depuis desktop
+  if (!currentWorkspace || isWorkspaceSwitching) return;
 
   // Distinguer dossier vs favori (un dossier n'a pas d'URL)
   const isFolder = !bookmark.url;
   console.log(isFolder ? "Dossier créé:" : "Favori créé:", bookmark.title);
 
   if (isWebSocketConnected) {
+    const syncId = getOrCreateSyncIdForChromeId(currentWorkspace.id, bookmark.id);
+    const parentSyncId = bookmark.parentId ? getOrCreateSyncIdForChromeId(currentWorkspace.id, bookmark.parentId) : ROOT_BAR_SYNC_ID;
     sendWebSocketMessage({
       type: isFolder ? "folder_created" : "bookmark_created",
       payload: {
-        id: bookmark.id,
+        id: syncId,
+        syncId,
         title: bookmark.title,
         url: bookmark.url,
-        parentId: bookmark.parentId,
-        dateAdded: bookmark.dateAdded
+        parentId: parentSyncId,
+        dateAdded: bookmark.dateAdded,
+        workspaceId: currentWorkspace.id,
+        baseUpdatedAtLamport: workspaceState.lamportBySync.get(syncId) || 0
       }
     });
   }
@@ -612,21 +1006,25 @@ chrome.bookmarks.onCreated.addListener((id, bookmark) => {
 
 chrome.bookmarks.onRemoved.addListener((id, removeInfo) => {
   if (isUpdatingFromDesktop) return; // Ignorer si mise à jour depuis desktop
+  if (!currentWorkspace || isWorkspaceSwitching) return;
 
   // removeInfo.node contient les infos du nœud supprimé
   const isFolder = removeInfo.node && !removeInfo.node.url;
   console.log(isFolder ? "Dossier supprimé:" : "Favori supprimé:", id);
 
   if (isWebSocketConnected) {
+    const syncId = workspaceState.chromeToSync.get(id);
+    if (!syncId) return;
     sendWebSocketMessage({
       type: isFolder ? "folder_removed" : "bookmark_removed",
-      payload: { id }
+      payload: { id: syncId, syncId, workspaceId: currentWorkspace.id, baseUpdatedAtLamport: workspaceState.lamportBySync.get(syncId) || 0 }
     });
   }
 });
 
 chrome.bookmarks.onChanged.addListener(async (id, changeInfo) => {
   if (isUpdatingFromDesktop) return; // Ignorer si mise à jour depuis desktop
+  if (!currentWorkspace || isWorkspaceSwitching) return;
 
   if (isWebSocketConnected) {
     // Récupérer les données complètes du favori/dossier
@@ -635,13 +1033,19 @@ chrome.bookmarks.onChanged.addListener(async (id, changeInfo) => {
       const isFolder = !bookmark.url;
       console.log(isFolder ? "Dossier modifié:" : "Favori modifié:", id, changeInfo);
 
+      const syncId = getOrCreateSyncIdForChromeId(currentWorkspace.id, id);
+      const parentSyncId = bookmark.parentId ? getOrCreateSyncIdForChromeId(currentWorkspace.id, bookmark.parentId) : ROOT_BAR_SYNC_ID;
+
       sendWebSocketMessage({
         type: isFolder ? "folder_changed" : "bookmark_changed",
         payload: {
-          id,
+          id: syncId,
+          syncId,
           title: bookmark.title,
           url: bookmark.url,
-          parentId: bookmark.parentId
+          parentId: parentSyncId,
+          workspaceId: currentWorkspace.id,
+          baseUpdatedAtLamport: workspaceState.lamportBySync.get(syncId) || 0
         }
       });
     } catch (e) {
@@ -652,6 +1056,7 @@ chrome.bookmarks.onChanged.addListener(async (id, changeInfo) => {
 
 chrome.bookmarks.onMoved.addListener(async (id, moveInfo) => {
   if (isUpdatingFromDesktop) return; // Ignorer si mise à jour depuis desktop
+  if (!currentWorkspace || isWorkspaceSwitching) return;
   console.log("Favori/Dossier déplacé:", id, moveInfo);
 
   // Envoyer uniquement les informations de déplacement (sync incrémentale)
@@ -660,16 +1065,22 @@ chrome.bookmarks.onMoved.addListener(async (id, moveInfo) => {
       const [bookmark] = await chrome.bookmarks.get(id);
       const isFolder = !bookmark.url;
 
+      const syncId = getOrCreateSyncIdForChromeId(currentWorkspace.id, id);
+      const parentSyncId = moveInfo.parentId ? getOrCreateSyncIdForChromeId(currentWorkspace.id, moveInfo.parentId) : ROOT_BAR_SYNC_ID;
+
       sendWebSocketMessage({
         type: isFolder ? "folder_changed" : "bookmark_changed",
         payload: {
-          id,
+          id: syncId,
+          syncId,
           title: bookmark.title,
           url: bookmark.url,
-          parentId: moveInfo.parentId,
+          parentId: parentSyncId,
           oldParentId: moveInfo.oldParentId,
           index: moveInfo.index,
-          oldIndex: moveInfo.oldIndex
+          oldIndex: moveInfo.oldIndex,
+          workspaceId: currentWorkspace.id,
+          baseUpdatedAtLamport: workspaceState.lamportBySync.get(syncId) || 0
         }
       });
     } catch (e) {
@@ -693,11 +1104,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "get_status") {
-    sendResponse({
-      connected: isWebSocketConnected,
-      browser: getBrowserName()
+    getBrowserName().then(browser => {
+      sendResponse({
+        connected: isWebSocketConnected,
+        browser: browser,
+        workspace: currentWorkspace
+      });
     });
-    return false;
+    return true; // Réponse asynchrone
   }
 
   if (request.action === "ping") {
@@ -707,12 +1121,78 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ connected: isWebSocketConnected });
     return false;
   }
+
+  // ==================== Actions Workspaces ====================
+
+  if (request.action === "get_workspaces") {
+    // Demander la liste des workspaces au desktop
+    if (isWebSocketConnected) {
+      sendWebSocketMessage({ type: "get_workspaces" });
+      // La réponse arrivera via workspaces_list
+      sendResponse({
+        success: true,
+        workspaces: availableWorkspaces,
+        current: currentWorkspace
+      });
+    } else {
+      sendResponse({
+        success: false,
+        error: "Non connecté au desktop"
+      });
+    }
+    return false;
+  }
+
+  if (request.action === "get_current_workspace") {
+    sendResponse({
+      workspace: currentWorkspace,
+      workspaces: availableWorkspaces
+    });
+    return false;
+  }
+
+  if (request.action === "switch_workspace") {
+    if (!isWebSocketConnected) {
+      sendResponse({ success: false, error: "Non connecté au desktop" });
+      return false;
+    }
+
+    if (isWorkspaceSwitching) {
+      sendResponse({ success: false, error: "Switch en cours" });
+      return false;
+    }
+
+    const workspaceId = request.workspaceId;
+    if (!workspaceId) {
+      sendResponse({ success: false, error: "ID workspace requis" });
+      return false;
+    }
+
+    // Envoyer la demande de switch au desktop
+    sendWebSocketMessage({
+      type: "switch_workspace",
+      payload: { workspaceId }
+    });
+
+    // Le switch sera confirmé par workspace_switched
+    sendResponse({ success: true, message: "Switch en cours..." });
+    return false;
+  }
 });
 
 // ==================== Initialization ====================
 
 // Start WebSocket connection when extension loads
-connectWebSocket();
+;(async () => {
+  browserInstanceId = await getOrCreateBrowserInstanceId();
+  const saved = await storageGet([STORAGE_KEYS.currentWorkspace]);
+  const cw = saved[STORAGE_KEYS.currentWorkspace];
+  if (cw && cw.id) {
+    currentWorkspace = cw;
+    await loadWorkspaceState(currentWorkspace.id);
+  }
+  connectWebSocket();
+})();
 
 // Periodic heartbeat to keep connection alive
 setInterval(() => {

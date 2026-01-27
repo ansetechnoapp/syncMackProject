@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use log::{error, info};
 use directories::UserDirs;
 
+use uuid::Uuid;
+
 pub const APP_NAME: &str = "SyncMark";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -20,6 +22,8 @@ pub struct Config {
     pub backup_enabled: bool,
     #[serde(default = "default_websocket_port")]
     pub websocket_port: u16,
+    #[serde(default)]
+    pub client_id: Option<String>,
 }
 
 fn default_enabled() -> bool { true }
@@ -38,6 +42,7 @@ impl Default for Config {
             max_bookmarks: default_max_bookmarks(),
             backup_enabled: default_backup_enabled(),
             websocket_port: default_websocket_port(),
+            client_id: Some(Uuid::new_v4().to_string()),
         }
     }
 }
@@ -90,8 +95,15 @@ impl ConfigManager {
 
         match fs::read_to_string(&path) {
             Ok(content) => {
-                match serde_json::from_str(&content) {
-                    Ok(config) => config,
+                match serde_json::from_str::<Config>(&content) {
+                    Ok(mut config) => {
+                        // Ensure client_id exists
+                        if config.client_id.is_none() {
+                            config.client_id = Some(Uuid::new_v4().to_string());
+                            Self::save_config(&config);
+                        }
+                        config
+                    },
                     Err(e) => {
                         error!("Failed to parse config: {}", e);
                         Config::default()

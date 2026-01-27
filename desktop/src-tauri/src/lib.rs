@@ -4,6 +4,7 @@ pub mod config;
 pub mod file_watcher;
 pub mod state;
 pub mod websocket;
+pub mod workspace;
 
 use std::sync::Arc;
 use log::info;
@@ -12,6 +13,7 @@ use bookmarks::BookmarksManager;
 use commands::*;
 use config::ConfigManager;
 use state::AppState;
+use workspace::WorkspaceManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -47,10 +49,43 @@ pub fn run() {
             get_connected_clients,
             request_sync_from_extensions,
             get_data_directory,
+            // Commandes Workspaces
+            get_workspaces,
+            get_workspace,
+            create_workspace,
+            update_workspace,
+            delete_workspace,
+            duplicate_workspace,
+            get_workspace_assignments,
+            assign_workspace_to_browser,
+            unassign_workspace_from_browser,
+            check_legacy_migration,
+            run_legacy_migration,
+            get_workspace_tree,
+            get_workspace_conflicts,
+            resolve_workspace_conflict,
+            export_workspace_to_file,
+            import_workspace_from_file,
+            create_backup,
+            restore_backup,
+            add_bookmark_to_workspace,
+            remove_bookmark_from_workspace,
+            update_bookmark_in_workspace,
         ])
         .setup(move |app| {
             // Store AppHandle for event emission
             app_state.set_app_handle(app.handle().clone());
+
+            // Migration automatique depuis l'ancien format si nécessaire
+            if WorkspaceManager::needs_legacy_migration() {
+                info!("Migration legacy détectée, exécution...");
+                match WorkspaceManager::migrate_legacy_bookmarks() {
+                    Ok(ws) => info!("Migration réussie: workspace '{}' créé", ws.name),
+                    Err(e) => log::error!("Échec migration: {}", e),
+                }
+                // Recharger l'index après migration
+                app_state.reload_workspaces_index();
+            }
 
             let state = app_state.clone();
             let state_for_watcher = app_state.clone();

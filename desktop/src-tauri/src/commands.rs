@@ -3,6 +3,7 @@ use serde_json::{json, Value};
 use crate::state::{SharedState, SyncStatus, ConnectedClient};
 use crate::config::{Config, ConfigManager};
 use crate::bookmarks::{BookmarksData, BookmarksManager};
+use crate::workspace::{Workspace, WorkspaceSummary, WorkspaceAssignment, WorkspaceManager, WorkspaceConflict};
 use uuid::Uuid;
 
 #[tauri::command]
@@ -271,4 +272,365 @@ pub fn update_folder(state: State<SharedState>, folder_id: String, folder: Value
     }
 
     result
+}
+
+// ==================== Commandes pour les Workspaces ====================
+
+/// Liste tous les workspaces (résumés)
+#[tauri::command]
+pub fn get_workspaces() -> Vec<WorkspaceSummary> {
+    WorkspaceManager::list_workspaces()
+}
+
+/// Obtient un workspace complet par son ID
+#[tauri::command]
+pub fn get_workspace(workspace_id: String) -> Result<Workspace, String> {
+    WorkspaceManager::load_workspace(&workspace_id)
+}
+
+/// Crée un nouveau workspace
+#[tauri::command]
+pub fn create_workspace(state: State<SharedState>, name: String, color: Option<String>) -> Result<Workspace, String> {
+    let workspace = WorkspaceManager::create_workspace(name, color)?;
+
+    // Recharger l'index dans le state
+    state.reload_workspaces_index();
+
+    // Notifier le frontend
+    let workspaces = WorkspaceManager::list_workspaces();
+    state.emit_to_frontend("workspaces_updated", &workspaces);
+
+    Ok(workspace)
+}
+
+/// Met à jour un workspace existant
+#[tauri::command]
+pub fn update_workspace(
+    state: State<SharedState>,
+    workspace_id: String,
+    name: Option<String>,
+    color: Option<String>,
+    icon: Option<String>,
+) -> Result<Workspace, String> {
+    let workspace = WorkspaceManager::update_workspace(&workspace_id, name, color, icon)?;
+
+    // Recharger l'index dans le state
+    state.reload_workspaces_index();
+
+    // Notifier le frontend
+    let workspaces = WorkspaceManager::list_workspaces();
+    state.emit_to_frontend("workspaces_updated", &workspaces);
+
+    Ok(workspace)
+}
+
+/// Supprime un workspace
+#[tauri::command]
+pub fn delete_workspace(state: State<SharedState>, workspace_id: String) -> Result<(), String> {
+    // Vérifier qu'aucun navigateur n'utilise ce workspace
+    let browsers = WorkspaceManager::get_browsers_for_workspace(&workspace_id);
+    if !browsers.is_empty() {
+        return Err(format!(
+            "Impossible de supprimer : {} navigateur(s) utilisent ce workspace",
+            browsers.len()
+        ));
+    }
+
+    WorkspaceManager::delete_workspace(&workspace_id)?;
+
+    // Recharger l'index dans le state
+    state.reload_workspaces_index();
+
+    // Notifier le frontend
+    let workspaces = WorkspaceManager::list_workspaces();
+    state.emit_to_frontend("workspaces_updated", &workspaces);
+
+    Ok(())
+}
+
+/// Duplique un workspace
+#[tauri::command]
+pub fn duplicate_workspace(
+    state: State<SharedState>,
+    workspace_id: String,
+    new_name: String,
+) -> Result<Workspace, String> {
+    let workspace = WorkspaceManager::duplicate_workspace(&workspace_id, new_name)?;
+
+    // Recharger l'index dans le state
+    state.reload_workspaces_index();
+
+    // Notifier le frontend
+    let workspaces = WorkspaceManager::list_workspaces();
+    state.emit_to_frontend("workspaces_updated", &workspaces);
+
+    Ok(workspace)
+}
+
+/// Obtient toutes les assignments (workspace <-> navigateur)
+#[tauri::command]
+pub fn get_workspace_assignments() -> Vec<WorkspaceAssignment> {
+    WorkspaceManager::get_assignments()
+}
+
+/// Assigne un workspace à un navigateur
+#[tauri::command]
+pub fn assign_workspace_to_browser(
+    state: State<SharedState>,
+    browser_id: String,
+    workspace_id: String,
+) -> Result<(), String> {
+    let (connection_id, browser_name) = {
+        let clients = state.connected_clients.read();
+        let mut found: Option<(String, String)> = None;
+        for (cid, c) in clients.iter() {
+            if c.browser_instance_id.as_deref() == Some(browser_id.as_str()) {
+                found = Some((cid.clone(), c.browser.clone()));
+                break;
+            }
+        }
+        found.ok_or_else(|| "Navigateur non trouvé (non connecté)".to_string())?
+    };
+
+    WorkspaceManager::assign_workspace(&browser_id, &browser_name, &workspace_id)?;
+
+    state.update_client_workspace(&connection_id, Some(workspace_id.clone()));
+
+    // Recharger l'index
+    state.reload_workspaces_index();
+
+    // Charger le workspace et l'envoyer au navigateur ciblé
+    if let Ok(workspace) = WorkspaceManager::load_workspace(&workspace_id) {
+        let message = json!({
+            "type": "workspace_switched",
+            "payload": {
+                "targetBrowserInstanceId": browser_id,
+                "workspaceId": workspace.id,
+                "workspaceName": workspace.name,
+                "bookmarks": workspace.bookmarks,
+                "folders": workspace.folders,
+                "version": workspace.version
+            }
+        }).to_string();
+        state.broadcast_message(&message);
+    }
+
+    // Notifier le frontend
+    let assignments = WorkspaceManager::get_assignments();
+    state.emit_to_frontend("assignments_updated", &assignments);
+
+    Ok(())
+}
+
+/// Retire l'assignment d'un navigateur
+#[tauri::command]
+pub fn unassign_workspace_from_browser(
+    state: State<SharedState>,
+    browser_id: String,
+) -> Result<(), String> {
+    WorkspaceManager::unassign_workspace(&browser_id)?;
+
+    let connection_id = {
+        let clients = state.connected_clients.read();
+        clients.iter()
+            .find(|(_, c)| c.browser_instance_id.as_deref() == Some(browser_id.as_str()))
+            .map(|(cid, _)| cid.clone())
+    };
+    if let Some(cid) = connection_id {
+        state.update_client_workspace(&cid, None);
+    }
+
+    // Recharger l'index
+    state.reload_workspaces_index();
+
+    // Notifier le frontend
+    let assignments = WorkspaceManager::get_assignments();
+    state.emit_to_frontend("assignments_updated", &assignments);
+
+    Ok(())
+}
+
+/// Vérifie si une migration depuis l'ancien format est nécessaire
+#[tauri::command]
+pub fn check_legacy_migration() -> bool {
+    WorkspaceManager::needs_legacy_migration()
+}
+
+/// Exécute la migration depuis l'ancien format
+#[tauri::command]
+pub fn run_legacy_migration(state: State<SharedState>) -> Result<Workspace, String> {
+    let workspace = WorkspaceManager::migrate_legacy_bookmarks()?;
+
+    // Recharger l'index
+    state.reload_workspaces_index();
+
+    // Notifier le frontend
+    let workspaces = WorkspaceManager::list_workspaces();
+    state.emit_to_frontend("workspaces_updated", &workspaces);
+
+    Ok(workspace)
+}
+
+/// Obtient l'arborescence d'un workspace spécifique
+#[tauri::command]
+pub fn get_workspace_tree(workspace_id: String) -> Result<Value, String> {
+    let workspace = WorkspaceManager::load_workspace(&workspace_id)?;
+
+    // Construire l'arborescence comme pour BookmarksManager::build_tree
+    // mais avec les données du workspace
+    let data = crate::bookmarks::BookmarksData {
+        version: "1.0".to_string(),
+        created_at: None,
+        last_updated: None,
+        bookmarks: workspace.bookmarks,
+        folders: workspace.folders,
+        metadata: crate::bookmarks::Metadata::default(),
+    };
+
+    Ok(BookmarksManager::build_tree(&data))
+}
+
+#[tauri::command]
+pub fn get_workspace_conflicts(workspace_id: String) -> Result<Vec<WorkspaceConflict>, String> {
+    WorkspaceManager::list_conflicts(&workspace_id)
+}
+
+#[tauri::command]
+pub fn resolve_workspace_conflict(
+    state: State<SharedState>,
+    workspace_id: String,
+    conflict_id: String,
+    resolution: String,
+) -> Result<Workspace, String> {
+    let resolved_by = ConfigManager::load_config().client_id.unwrap_or_else(|| "desktop".to_string());
+    let ws = WorkspaceManager::resolve_conflict(&workspace_id, &conflict_id, &resolution, &resolved_by)?;
+    let workspaces = WorkspaceManager::list_workspaces();
+    state.emit_to_frontend("workspaces_updated", &workspaces);
+    Ok(ws)
+}
+
+#[tauri::command]
+pub fn export_workspace_to_file(workspace_id: String) -> Result<String, String> {
+    WorkspaceManager::export_workspace(&workspace_id)
+}
+
+#[tauri::command]
+pub fn import_workspace_from_file(state: State<SharedState>, path: String, mode: String) -> Result<Workspace, String> {
+    let ws = WorkspaceManager::import_workspace_from_path(&path, &mode)?;
+    state.reload_workspaces_index();
+    let workspaces = WorkspaceManager::list_workspaces();
+    state.emit_to_frontend("workspaces_updated", &workspaces);
+    Ok(ws)
+}
+
+#[tauri::command]
+pub fn create_backup() -> Result<String, String> {
+    WorkspaceManager::backup_all()
+}
+
+#[tauri::command]
+pub fn restore_backup(state: State<SharedState>, path: String) -> Result<String, String> {
+    let (pre_backup, _index) = WorkspaceManager::restore_backup_from_path(&path)?;
+    state.reload_workspaces_index();
+    let workspaces = WorkspaceManager::list_workspaces();
+    state.emit_to_frontend("workspaces_updated", &workspaces);
+    Ok(pre_backup)
+}
+
+// ==================== CRUD Items in Workspace ====================
+
+#[tauri::command]
+pub fn add_bookmark_to_workspace(
+    state: State<SharedState>,
+    workspace_id: String,
+    bookmark: Value
+) -> Result<bool, String> {
+    let mut b: crate::bookmarks::Bookmark = serde_json::from_value(bookmark)
+        .map_err(|e| format!("Invalid bookmark: {}", e))?;
+    
+    if b.id.is_empty() {
+        b.id = Uuid::new_v4().to_string();
+    }
+    if b.sync_id.is_empty() {
+        b.sync_id = Uuid::new_v4().to_string();
+    }
+    b.updated_at_lamport = 1;
+    b.updated_by = "desktop".to_string();
+
+    WorkspaceManager::add_bookmark_to_workspace(&workspace_id, b)?;
+    
+    // Notify
+    if let Ok(workspace) = WorkspaceManager::load_workspace(&workspace_id) {
+        let message = json!({
+            "type": "bookmarks_updated",
+            "payload": {
+                "workspaceId": workspace.id,
+                "bookmarks": &workspace.bookmarks,
+                "folders": &workspace.folders,
+                "version": workspace.version,
+                "source": "desktop"
+            }
+        }).to_string();
+        state.broadcast_message(&message);
+        
+        // Refresh workspaces list (counts changed)
+        let workspaces = WorkspaceManager::list_workspaces();
+        state.emit_to_frontend("workspaces_updated", &workspaces);
+    }
+    
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn remove_bookmark_from_workspace(
+    state: State<SharedState>,
+    workspace_id: String,
+    bookmark_id: String
+) -> Result<bool, String> {
+    WorkspaceManager::remove_bookmark_from_workspace(&workspace_id, &bookmark_id)?;
+    
+    if let Ok(workspace) = WorkspaceManager::load_workspace(&workspace_id) {
+        let message = json!({
+            "type": "bookmarks_updated",
+            "payload": {
+                "workspaceId": workspace.id,
+                "bookmarks": &workspace.bookmarks,
+                "folders": &workspace.folders,
+                "version": workspace.version,
+                "source": "desktop"
+            }
+        }).to_string();
+        state.broadcast_message(&message);
+        
+        let workspaces = WorkspaceManager::list_workspaces();
+        state.emit_to_frontend("workspaces_updated", &workspaces);
+    }
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn update_bookmark_in_workspace(
+    state: State<SharedState>,
+    workspace_id: String,
+    bookmark_id: String,
+    title: Option<String>,
+    url: Option<String>,
+    parent_id: Option<String>
+) -> Result<bool, String> {
+    WorkspaceManager::update_bookmark_in_workspace(&workspace_id, &bookmark_id, title, url, parent_id)?;
+    
+    if let Ok(workspace) = WorkspaceManager::load_workspace(&workspace_id) {
+        let message = json!({
+            "type": "bookmarks_updated",
+            "payload": {
+                "workspaceId": workspace.id,
+                "bookmarks": &workspace.bookmarks,
+                "folders": &workspace.folders,
+                "version": workspace.version,
+                "source": "desktop"
+            }
+        }).to_string();
+        state.broadcast_message(&message);
+    }
+    Ok(true)
 }

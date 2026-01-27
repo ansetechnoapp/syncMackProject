@@ -90,8 +90,58 @@ export interface SyncStatus {
 export interface ConnectedClient {
   id: string;
   browser: string;
+  browser_instance_id?: string;
   connected_at: string;
   last_activity: string;
+  workspace_id?: string;
+}
+
+// ==================== Interfaces Workspaces ====================
+
+export interface WorkspaceSummary {
+  id: string;
+  name: string;
+  color?: string;
+  icon?: string;
+  total_bookmarks: number;
+  total_folders: number;
+  open_conflicts?: number;
+  created_at: string;
+  updated_at: string;
+  version?: number;
+}
+
+export interface Workspace {
+  id: string;
+  name: string;
+  color?: string;
+  icon?: string;
+  created_at: string;
+  updated_at: string;
+  bookmarks: BookmarkData[];
+  folders: FolderData[];
+  version: number;
+}
+
+export interface WorkspaceConflict {
+  id: string;
+  workspaceId: string;
+  itemType: string;
+  syncId: string;
+  detectedAt: string;
+  status: string;
+  desktopSnapshot: unknown;
+  incomingSnapshot: unknown;
+  resolvedAt?: string | null;
+  resolvedBy?: string | null;
+  resolution?: string | null;
+}
+
+export interface WorkspaceAssignment {
+  browser_id: string;
+  browser_name: string;
+  workspace_id?: string;
+  assigned_at: string;
 }
 
 export async function getConfig(): Promise<Config> {
@@ -154,4 +204,109 @@ export async function removeFolder(folderId: string): Promise<boolean> {
 
 export async function updateFolder(folderId: string, folder: FolderData): Promise<boolean> {
   return invokeWithTimeout<boolean>("update_folder", { folderId, folder });
+}
+
+// ==================== Fonctions pour les Workspaces ====================
+
+export async function getWorkspaces(): Promise<WorkspaceSummary[]> {
+  return invokeWithTimeout<WorkspaceSummary[]>("get_workspaces");
+}
+
+export async function getWorkspace(workspaceId: string): Promise<Workspace> {
+  return invokeWithTimeout<Workspace>("get_workspace", { workspaceId });
+}
+
+export async function createWorkspace(name: string, color?: string): Promise<Workspace> {
+  return invokeWithTimeout<Workspace>("create_workspace", { name, color });
+}
+
+export async function updateWorkspace(
+  workspaceId: string,
+  name?: string,
+  color?: string,
+  icon?: string
+): Promise<Workspace> {
+  return invokeWithTimeout<Workspace>("update_workspace", { workspaceId, name, color, icon });
+}
+
+export async function deleteWorkspace(workspaceId: string): Promise<void> {
+  return invokeWithTimeout<void>("delete_workspace", { workspaceId });
+}
+
+export async function duplicateWorkspace(workspaceId: string, newName: string): Promise<Workspace> {
+  return invokeWithTimeout<Workspace>("duplicate_workspace", { workspaceId, newName });
+}
+
+export async function getWorkspaceAssignments(): Promise<WorkspaceAssignment[]> {
+  return invokeWithTimeout<WorkspaceAssignment[]>("get_workspace_assignments");
+}
+
+export async function assignWorkspaceToBrowser(browserId: string, workspaceId: string): Promise<void> {
+  return invokeWithTimeout<void>("assign_workspace_to_browser", { browserId, workspaceId });
+}
+
+export async function unassignWorkspaceFromBrowser(browserId: string): Promise<void> {
+  return invokeWithTimeout<void>("unassign_workspace_from_browser", { browserId });
+}
+
+export async function checkLegacyMigration(): Promise<boolean> {
+  return invokeWithTimeout<boolean>("check_legacy_migration");
+}
+
+export async function runLegacyMigration(): Promise<Workspace> {
+  return invokeWithTimeout<Workspace>("run_legacy_migration", undefined, 30000);
+}
+
+export async function getWorkspaceTree(workspaceId: string): Promise<BookmarksTree> {
+  return invokeWithTimeout<BookmarksTree>("get_workspace_tree", { workspaceId }, 12000);
+}
+
+export async function getWorkspaceConflicts(workspaceId: string): Promise<WorkspaceConflict[]> {
+  return invokeWithTimeout<WorkspaceConflict[]>("get_workspace_conflicts", { workspaceId }, 12000);
+}
+
+export async function resolveWorkspaceConflict(
+  workspaceId: string,
+  conflictId: string,
+  resolution: "keep_desktop" | "keep_incoming"
+): Promise<Workspace> {
+  return invokeWithTimeout<Workspace>("resolve_workspace_conflict", { workspaceId, conflictId, resolution }, 20000);
+}
+
+export async function exportWorkspaceToFile(workspaceId: string): Promise<string> {
+  return invokeWithTimeout<string>("export_workspace_to_file", { workspaceId }, 20000);
+}
+
+export async function importWorkspaceFromFile(path: string, mode: "create"): Promise<Workspace> {
+  return invokeWithTimeout<Workspace>("import_workspace_from_file", { path, mode }, 30000);
+}
+
+export async function createBackup(): Promise<string> {
+  return invokeWithTimeout<string>("create_backup", undefined, 30000);
+}
+
+export async function restoreBackup(path: string): Promise<string> {
+  return invokeWithTimeout<string>("restore_backup", { path }, 60000);
+}
+
+export async function addBookmarkToWorkspace(workspaceId: string, bookmark: BookmarkData): Promise<boolean> {
+  return invokeWithTimeout<boolean>("add_bookmark_to_workspace", { workspaceId, bookmark });
+}
+
+export async function removeBookmarkFromWorkspace(workspaceId: string, bookmarkId: string): Promise<boolean> {
+  return invokeWithTimeout<boolean>("remove_bookmark_from_workspace", { workspaceId, bookmarkId });
+}
+
+export async function updateBookmarkInWorkspace(
+  workspaceId: string,
+  bookmarkId: string,
+  updates: { title?: string; url?: string; parentId?: string }
+): Promise<boolean> {
+  return invokeWithTimeout<boolean>("update_bookmark_in_workspace", {
+    workspaceId,
+    bookmarkId,
+    title: updates.title,
+    url: updates.url,
+    parentId: updates.parentId,
+  });
 }

@@ -8,12 +8,23 @@
 <body>
     <div class="header">
         <h1>SyncMark</h1>
-        <p>Synchronisation automatique locale</p>
+        <p>Gestionnaire de workspaces</p>
     </div>
 
     <div class="connection-status">
         <span id="connectionDot" class="status-dot disconnected"></span>
         <span id="connectionText">Vérification...</span>
+    </div>
+
+    <div class="workspace-section">
+        <label for="workspaceSelect">Workspace actif</label>
+        <div class="workspace-current">
+            <span id="workspaceName" class="workspace-name">Aucun</span>
+            <span id="workspaceColor" class="workspace-color"></span>
+        </div>
+        <select id="workspaceSelect" disabled>
+            <option value="">Chargement...</option>
+        </select>
     </div>
 
     <div class="actions">

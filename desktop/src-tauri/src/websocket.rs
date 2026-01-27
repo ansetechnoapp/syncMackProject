@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::state::{SharedState, ConnectedClient};
 use crate::bookmarks::BookmarksManager;
+use crate::workspace::WorkspaceManager;
 
 /// Nombre maximum de clients WebSocket autorisés simultanément
 const MAX_CLIENTS: usize = 10;
@@ -20,6 +21,8 @@ const MAX_CLIENTS: usize = 10;
 const ALLOWED_MESSAGE_TYPES: &[&str] = &[
     "ping", "get_status", "sync_bookmarks", "bookmark_created", "bookmark_removed",
     "bookmark_changed", "identify", "folder_created", "folder_removed", "folder_changed",
+    // Nouveaux messages pour les workspaces
+    "switch_workspace", "get_workspaces",
 ];
 
 pub async fn start_websocket_server(state: SharedState, port: u16) {
@@ -122,20 +125,22 @@ async fn handle_connection(
 
     let client = ConnectedClient {
         id: client_id.clone(),
-        browser: "Chrome".to_string(),
+        browser: "Unknown".to_string(),
+        browser_instance_id: None,
         connected_at: Utc::now(),
         last_activity: Utc::now(),
+        workspace_id: None,
     };
     state.add_client(client);
 
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
-    // Send welcome message
     let welcome = json!({
         "type": "connected",
         "payload": {
             "client_id": client_id,
-            "server_version": "1.0.0"
+            "server_version": "2.1.0",
+            "assigned_workspace": null
         }
     });
     let _ = ws_sender.send(Message::Text(welcome.to_string().into())).await;
@@ -200,24 +205,40 @@ fn is_valid_message(message: &Value) -> bool {
                 .is_some()
         }
         "bookmark_created" | "bookmark_changed" => {
-            message.get("payload").is_some()
+            message.get("payload")
+                .and_then(|p| p.get("syncId"))
+                .and_then(|id| id.as_str())
+                .is_some()
         }
         "bookmark_removed" | "folder_removed" => {
             message.get("payload")
-                .and_then(|p| p.get("id"))
+                .and_then(|p| p.get("syncId"))
                 .and_then(|id| id.as_str())
                 .is_some()
         }
         "folder_created" | "folder_changed" => {
-            message.get("payload").is_some()
+            message.get("payload")
+                .and_then(|p| p.get("syncId"))
+                .and_then(|id| id.as_str())
+                .is_some()
         }
         "identify" => {
             message.get("payload")
                 .and_then(|p| p.get("browser"))
                 .and_then(|b| b.as_str())
                 .is_some()
+                && message.get("payload")
+                    .and_then(|p| p.get("browserInstanceId"))
+                    .and_then(|b| b.as_str())
+                    .is_some()
         }
-        // ping et get_status n'ont pas besoin de payload
+        "switch_workspace" => {
+            message.get("payload")
+                .and_then(|p| p.get("workspaceId"))
+                .and_then(|id| id.as_str())
+                .is_some()
+        }
+        // ping, get_status et get_workspaces n'ont pas besoin de payload
         _ => true,
     }
 }
@@ -259,47 +280,116 @@ fn process_client_message(
 
         "sync_bookmarks" => {
             if let Some(payload) = message.get("payload") {
-                if let Some(bookmarks) = payload.get("bookmarks").and_then(|v| v.as_array()) {
+                if let Some(bookmarks_array) = payload.get("bookmarks").and_then(|v| v.as_array()) {
                     state.set_sync_in_progress(true);
                     state.mark_internal_save();
 
-                    let (success, merged, folders_merged) = {
-                         let mut local_data = state.bookmarks.write();
-                         BookmarksManager::process_sync_payload(&mut local_data, bookmarks.clone())
+                    let payload_ws_id = payload.get("workspaceId").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let workspace_id = payload_ws_id.or_else(|| state.get_client_workspace(client_id));
+
+                    // Récupérer le nom du navigateur
+                    let browser_name = {
+                        let clients = state.connected_clients.read();
+                        clients.get(client_id)
+                            .map(|c| c.browser.clone())
+                            .unwrap_or_else(|| "Unknown".to_string())
                     };
 
-                    state.update_sync_complete(
-                        success,
-                        if success { None } else { Some("Failed to save".to_string()) },
-                    );
-                    
-                    let broadcast = json!({
-                        "type": "bookmarks_updated",
-                        "payload": { "bookmarks": &merged }
-                    });
-                    state.broadcast_message(&broadcast.to_string());
+                    let browser_instance_id = {
+                        let clients = state.connected_clients.read();
+                        clients.get(client_id)
+                            .and_then(|c| c.browser_instance_id.clone())
+                            .unwrap_or_else(|| client_id.to_string())
+                    };
 
-                    if !folders_merged.is_empty() {
-                         let folders_broadcast = json!({
-                             "type": "folders_updated",
-                             "payload": { "folders": &folders_merged }
-                         });
-                         state.broadcast_message(&folders_broadcast.to_string());
-                    }
+                    // Extraire les bookmarks et folders du payload
+                    let (incoming_bookmarks, incoming_folders) = BookmarksManager::flatten_chrome_tree(bookmarks_array);
 
-                    let bookmarks_data = state.bookmarks.read().clone();
-                    state.emit_to_frontend("bookmarks_updated", &bookmarks_data);
+                    if let Some(ws_id) = workspace_id {
+                        // Workspace existant : synchroniser avec le workspace
+                        match WorkspaceManager::sync_bookmarks_to_workspace(&ws_id, incoming_bookmarks.clone(), incoming_folders.clone()) {
+                            Ok(workspace) => {
+                                info!("Workspace '{}' synced from {}: {} bookmarks", workspace.name, client_id, workspace.bookmarks.len());
 
-                    info!("Sync completed from {}: {} bookmarks", client_id, merged.len());
+                                // Broadcast aux autres clients qui ont le même workspace
+                                let broadcast = json!({
+                                    "type": "bookmarks_updated",
+                                    "payload": {
+                                        "workspaceId": ws_id,
+                                        "bookmarks": &workspace.bookmarks,
+                                        "folders": &workspace.folders,
+                                        "version": workspace.version,
+                                        "source": format!("browser-{}", browser_name)
+                                    }
+                                });
+                                state.broadcast_message(&broadcast.to_string());
 
-                    return Some(json!({
-                        "type": "sync_complete",
-                        "payload": {
-                            "success": success,
-                            "bookmarks": merged,
-                            "folders": folders_merged
+                                state.update_sync_complete(true, None);
+
+                                // Notifier le frontend
+                                let workspaces = WorkspaceManager::list_workspaces();
+                                state.emit_to_frontend("workspaces_updated", &workspaces);
+
+                                return Some(json!({
+                                    "type": "sync_complete",
+                                    "payload": {
+                                        "success": true,
+                                        "workspaceId": ws_id,
+                                        "bookmarks": workspace.bookmarks,
+                                        "folders": workspace.folders,
+                                        "version": workspace.version
+                                    }
+                                }).to_string());
+                            }
+                            Err(e) => {
+                                state.update_sync_complete(false, Some(e.clone()));
+                                return Some(json!({
+                                    "type": "sync_complete",
+                                    "payload": { "success": false, "error": e }
+                                }).to_string());
+                            }
                         }
-                    }).to_string());
+                    } else {
+                        // Pas de workspace : créer un nouveau workspace à partir des favoris du navigateur
+                        match WorkspaceManager::create_workspace_from_browser(
+                            &browser_name,
+                            &browser_instance_id,
+                            incoming_bookmarks.clone(),
+                            incoming_folders.clone(),
+                        ) {
+                            Ok(workspace) => {
+                                info!("New workspace '{}' created from {}", workspace.name, browser_name);
+
+                                // Mettre à jour le state du client
+                                state.update_client_workspace(client_id, Some(workspace.id.clone()));
+
+                                state.update_sync_complete(true, None);
+
+                                // Notifier le frontend
+                                let workspaces = WorkspaceManager::list_workspaces();
+                                state.emit_to_frontend("workspaces_updated", &workspaces);
+
+                                return Some(json!({
+                                    "type": "workspace_switched",
+                                    "payload": {
+                                        "workspaceId": workspace.id,
+                                        "workspaceName": workspace.name,
+                                        "bookmarks": workspace.bookmarks,
+                                        "folders": workspace.folders,
+                                        "version": workspace.version,
+                                        "created": true
+                                    }
+                                }).to_string());
+                            }
+                            Err(e) => {
+                                state.update_sync_complete(false, Some(e.clone()));
+                                return Some(json!({
+                                    "type": "sync_complete",
+                                    "payload": { "success": false, "error": e }
+                                }).to_string());
+                            }
+                        }
+                    }
                 }
             }
             None
@@ -307,26 +397,46 @@ fn process_client_message(
 
         "bookmark_created" => {
             if let Some(payload) = message.get("payload") {
-                // Marquer qu'on fait une sauvegarde interne (évite double notification du file_watcher)
                 state.mark_internal_save();
-                let result = {
-                    let mut bookmarks = state.bookmarks.write();
-                    if BookmarksManager::add_bookmark(&mut bookmarks, payload.clone()) {
-                        info!("Bookmark created from {}", client_id);
-                        Some((bookmarks.bookmarks.clone(), bookmarks.clone()))
-                    } else {
-                        None
-                    }
+                let workspace_id = payload.get("workspaceId").and_then(|v| v.as_str()).map(|s| s.to_string())
+                    .or_else(|| state.get_client_workspace(client_id));
+                let Some(ws_id) = workspace_id else { return None; };
+
+                let source = {
+                    let clients = state.connected_clients.read();
+                    clients.get(client_id)
+                        .and_then(|c| c.browser_instance_id.clone())
+                        .unwrap_or_else(|| client_id.to_string())
                 };
 
-                if let Some((list, data)) = result {
+                if let Ok((workspace, conflict)) = WorkspaceManager::apply_workspace_item_change(&ws_id, "bookmark_created", payload, &source) {
                     let broadcast = json!({
                         "type": "bookmarks_updated",
-                        "payload": { "bookmarks": list }
+                        "payload": {
+                            "workspaceId": ws_id,
+                            "bookmarks": &workspace.bookmarks,
+                            "folders": &workspace.folders,
+                            "version": workspace.version,
+                            "source": format!("browser-{}", source)
+                        }
                     });
                     state.broadcast_message(&broadcast.to_string());
-                    // Émettre vers le frontend React
-                    state.emit_to_frontend("bookmarks_updated", &data);
+
+                    if let Some(c) = conflict {
+                        let msg = json!({
+                            "type": "conflict_detected",
+                            "payload": {
+                                "workspaceId": ws_id,
+                                "conflictId": c.id,
+                                "syncId": c.sync_id,
+                                "itemType": c.item_type
+                            }
+                        });
+                        state.broadcast_message(&msg.to_string());
+                    }
+
+                    let workspaces = WorkspaceManager::list_workspaces();
+                    state.emit_to_frontend("workspaces_updated", &workspaces);
                 }
             }
             None
@@ -334,28 +444,46 @@ fn process_client_message(
 
         "bookmark_removed" => {
             if let Some(payload) = message.get("payload") {
-                if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
-                    // Marquer qu'on fait une sauvegarde interne (évite double notification du file_watcher)
-                    state.mark_internal_save();
-                    let result = {
-                        let mut bookmarks = state.bookmarks.write();
-                        if BookmarksManager::remove_bookmark(&mut bookmarks, id) {
-                            info!("Bookmark removed from {}: {}", client_id, id);
-                            Some((bookmarks.bookmarks.clone(), bookmarks.clone()))
-                        } else {
-                            None
-                        }
-                    };
+                state.mark_internal_save();
+                let workspace_id = payload.get("workspaceId").and_then(|v| v.as_str()).map(|s| s.to_string())
+                    .or_else(|| state.get_client_workspace(client_id));
+                let Some(ws_id) = workspace_id else { return None; };
 
-                    if let Some((list, data)) = result {
-                        let broadcast = json!({
-                            "type": "bookmarks_updated",
-                            "payload": { "bookmarks": list }
+                let source = {
+                    let clients = state.connected_clients.read();
+                    clients.get(client_id)
+                        .and_then(|c| c.browser_instance_id.clone())
+                        .unwrap_or_else(|| client_id.to_string())
+                };
+
+                if let Ok((workspace, conflict)) = WorkspaceManager::apply_workspace_item_change(&ws_id, "bookmark_removed", payload, &source) {
+                    let broadcast = json!({
+                        "type": "bookmarks_updated",
+                        "payload": {
+                            "workspaceId": ws_id,
+                            "bookmarks": &workspace.bookmarks,
+                            "folders": &workspace.folders,
+                            "version": workspace.version,
+                            "source": format!("browser-{}", source)
+                        }
+                    });
+                    state.broadcast_message(&broadcast.to_string());
+
+                    if let Some(c) = conflict {
+                        let msg = json!({
+                            "type": "conflict_detected",
+                            "payload": {
+                                "workspaceId": ws_id,
+                                "conflictId": c.id,
+                                "syncId": c.sync_id,
+                                "itemType": c.item_type
+                            }
                         });
-                        state.broadcast_message(&broadcast.to_string());
-                        // Émettre vers le frontend React
-                        state.emit_to_frontend("bookmarks_updated", &data);
+                        state.broadcast_message(&msg.to_string());
                     }
+
+                    let workspaces = WorkspaceManager::list_workspaces();
+                    state.emit_to_frontend("workspaces_updated", &workspaces);
                 }
             }
             None
@@ -363,28 +491,46 @@ fn process_client_message(
 
         "bookmark_changed" => {
             if let Some(payload) = message.get("payload") {
-                if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
-                    // Marquer qu'on fait une sauvegarde interne (évite double notification du file_watcher)
-                    state.mark_internal_save();
-                    let result = {
-                        let mut bookmarks = state.bookmarks.write();
-                        if BookmarksManager::update_bookmark(&mut bookmarks, id, payload.clone()) {
-                            info!("Bookmark updated from {}: {}", client_id, id);
-                            Some((bookmarks.bookmarks.clone(), bookmarks.clone()))
-                        } else {
-                            None
-                        }
-                    };
+                state.mark_internal_save();
+                let workspace_id = payload.get("workspaceId").and_then(|v| v.as_str()).map(|s| s.to_string())
+                    .or_else(|| state.get_client_workspace(client_id));
+                let Some(ws_id) = workspace_id else { return None; };
 
-                    if let Some((list, data)) = result {
-                        let broadcast = json!({
-                            "type": "bookmarks_updated",
-                            "payload": { "bookmarks": list }
+                let source = {
+                    let clients = state.connected_clients.read();
+                    clients.get(client_id)
+                        .and_then(|c| c.browser_instance_id.clone())
+                        .unwrap_or_else(|| client_id.to_string())
+                };
+
+                if let Ok((workspace, conflict)) = WorkspaceManager::apply_workspace_item_change(&ws_id, "bookmark_changed", payload, &source) {
+                    let broadcast = json!({
+                        "type": "bookmarks_updated",
+                        "payload": {
+                            "workspaceId": ws_id,
+                            "bookmarks": &workspace.bookmarks,
+                            "folders": &workspace.folders,
+                            "version": workspace.version,
+                            "source": format!("browser-{}", source)
+                        }
+                    });
+                    state.broadcast_message(&broadcast.to_string());
+
+                    if let Some(c) = conflict {
+                        let msg = json!({
+                            "type": "conflict_detected",
+                            "payload": {
+                                "workspaceId": ws_id,
+                                "conflictId": c.id,
+                                "syncId": c.sync_id,
+                                "itemType": c.item_type
+                            }
                         });
-                        state.broadcast_message(&broadcast.to_string());
-                        // Émettre vers le frontend React
-                        state.emit_to_frontend("bookmarks_updated", &data);
+                        state.broadcast_message(&msg.to_string());
                     }
+
+                    let workspaces = WorkspaceManager::list_workspaces();
+                    state.emit_to_frontend("workspaces_updated", &workspaces);
                 }
             }
             None
@@ -393,52 +539,186 @@ fn process_client_message(
         "identify" => {
             if let Some(payload) = message.get("payload") {
                 if let Some(browser) = payload.get("browser").and_then(|v| v.as_str()) {
-                    let mut clients = state.connected_clients.write();
-                    if let Some(client) = clients.get_mut(client_id) {
-                        client.browser = browser.to_string();
+                    let browser_instance_id = payload.get("browserInstanceId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    if browser_instance_id.is_empty() {
+                        return Some(json!({
+                            "type": "error",
+                            "payload": { "message": "Missing browserInstanceId" }
+                        }).to_string());
                     }
+
+                    // Mettre à jour le browser du client
+                    state.update_client_info(client_id, browser, &browser_instance_id);
                     info!("Client {} identified as {}", client_id, browser);
+
+                    let existing_assignment = WorkspaceManager::get_workspace_for_browser(&browser_instance_id);
+                    if let Some(ws_id) = existing_assignment {
+                        state.update_client_workspace(client_id, Some(ws_id.clone()));
+                        if let Ok(workspace) = WorkspaceManager::load_workspace(&ws_id) {
+                            return Some(json!({
+                                "type": "workspace_switched",
+                                "payload": {
+                                    "workspaceId": workspace.id,
+                                    "workspaceName": workspace.name,
+                                    "bookmarks": workspace.bookmarks,
+                                    "folders": workspace.folders,
+                                    "version": workspace.version,
+                                    "created": false
+                                }
+                            }).to_string());
+                        }
+                    }
+
+                    let current_ws_id = payload.get("currentWorkspaceId")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty());
+                    if current_ws_id.is_none() {
+                        info!("First connection from {}, requesting bookmarks for workspace creation", browser);
+                        return Some(json!({
+                            "type": "sync_request",
+                            "payload": {
+                                "reason": "first_connection"
+                            }
+                        }).to_string());
+                    }
                 }
             }
             None
+        }
+
+        "switch_workspace" => {
+            if let Some(payload) = message.get("payload") {
+                if let Some(workspace_id) = payload.get("workspaceId").and_then(|v| v.as_str()) {
+                    let browser_instance_id = {
+                        let clients = state.connected_clients.read();
+                        clients.get(client_id)
+                            .and_then(|c| c.browser_instance_id.clone())
+                    };
+                    let Some(browser_instance_id) = browser_instance_id else {
+                        return Some(json!({
+                            "type": "error",
+                            "payload": { "message": "Client not identified" }
+                        }).to_string());
+                    };
+
+                    // Charger le workspace demandé
+                    match WorkspaceManager::load_workspace(workspace_id) {
+                        Ok(workspace) => {
+                            // Obtenir le nom du navigateur
+                            let browser_name = {
+                                let clients = state.connected_clients.read();
+                                clients.get(client_id)
+                                    .map(|c| c.browser.clone())
+                                    .unwrap_or_else(|| "Unknown".to_string())
+                            };
+
+                            // Assigner le workspace au navigateur
+                            if let Err(e) = WorkspaceManager::assign_workspace(&browser_instance_id, &browser_name, workspace_id) {
+                                warn!("Failed to assign workspace: {}", e);
+                                return Some(json!({
+                                    "type": "error",
+                                    "payload": { "message": e }
+                                }).to_string());
+                            }
+
+                            // Mettre à jour le state du client
+                            state.update_client_workspace(client_id, Some(workspace_id.to_string()));
+
+                            info!("Client {} switched to workspace '{}'", client_id, workspace.name);
+
+                            // Envoyer le workspace au client
+                            return Some(json!({
+                                "type": "workspace_switched",
+                                "payload": {
+                                    "workspaceId": workspace.id,
+                                    "workspaceName": workspace.name,
+                                    "bookmarks": workspace.bookmarks,
+                                    "folders": workspace.folders,
+                                    "version": workspace.version
+                                }
+                            }).to_string());
+                        }
+                        Err(e) => {
+                            warn!("Workspace not found: {}", e);
+                            return Some(json!({
+                                "type": "error",
+                                "payload": { "message": format!("Workspace non trouvé: {}", e) }
+                            }).to_string());
+                        }
+                    }
+                }
+            }
+            None
+        }
+
+        "get_workspaces" => {
+            let workspaces = WorkspaceManager::list_workspaces();
+            let current_ws_id = state.get_client_workspace(client_id);
+
+            // Ajouter un flag "assigned" pour indiquer le workspace actuel du client
+            let workspaces_with_status: Vec<_> = workspaces.iter().map(|ws| {
+                json!({
+                    "id": ws.id,
+                    "name": ws.name,
+                    "color": ws.color,
+                    "icon": ws.icon,
+                    "totalBookmarks": ws.total_bookmarks,
+                    "totalFolders": ws.total_folders,
+                    "assigned": current_ws_id.as_ref() == Some(&ws.id)
+                })
+            }).collect();
+
+            Some(json!({
+                "type": "workspaces_list",
+                "payload": {
+                    "workspaces": workspaces_with_status
+                }
+            }).to_string())
         }
 
         // ==================== Gestion des dossiers ====================
 
         "folder_created" => {
             if let Some(payload) = message.get("payload") {
-                // Marquer qu'on fait une sauvegarde interne (évite double notification du file_watcher)
                 state.mark_internal_save();
-                let result = {
-                    let mut bookmarks = state.bookmarks.write();
+                let workspace_id = payload.get("workspaceId").and_then(|v| v.as_str()).map(|s| s.to_string())
+                    .or_else(|| state.get_client_workspace(client_id));
+                let Some(ws_id) = workspace_id else { return None; };
 
-                    // If this folder comes from a desktop-initiated creation,
-                    // the extension will provide a tempId to map to the real Chrome id.
-                    if let (Some(temp_id), Some(real_id)) = (
-                        payload.get("tempId").and_then(|v| v.as_str()),
-                        payload.get("id").and_then(|v| v.as_str()),
-                    ) {
-                        if BookmarksManager::remap_folder_id(&mut bookmarks, temp_id, real_id) {
-                            info!("Folder created (mapped) from {}: {} -> {}", client_id, temp_id, real_id);
-                            Some((bookmarks.folders.clone(), bookmarks.clone()))
-                        } else {
-                            None
-                        }
-                    } else if BookmarksManager::add_folder(&mut bookmarks, payload.clone()) {
-                        info!("Folder created from {}", client_id);
-                        Some((bookmarks.folders.clone(), bookmarks.clone()))
-                    } else {
-                        None
-                    }
+                let source = {
+                    let clients = state.connected_clients.read();
+                    clients.get(client_id)
+                        .and_then(|c| c.browser_instance_id.clone())
+                        .unwrap_or_else(|| client_id.to_string())
                 };
 
-                if let Some((folders, data)) = result {
+                if let Ok((workspace, conflict)) = WorkspaceManager::apply_workspace_item_change(&ws_id, "folder_created", payload, &source) {
                     let broadcast = json!({
-                        "type": "folders_updated",
-                        "payload": { "folders": folders }
+                        "type": "bookmarks_updated",
+                        "payload": {
+                            "workspaceId": ws_id,
+                            "bookmarks": &workspace.bookmarks,
+                            "folders": &workspace.folders,
+                            "version": workspace.version,
+                            "source": format!("browser-{}", source)
+                        }
                     });
                     state.broadcast_message(&broadcast.to_string());
-                    state.emit_to_frontend("bookmarks_updated", &data);
+
+                    if let Some(c) = conflict {
+                        let msg = json!({
+                            "type": "conflict_detected",
+                            "payload": {
+                                "workspaceId": ws_id,
+                                "conflictId": c.id,
+                                "syncId": c.sync_id,
+                                "itemType": c.item_type
+                            }
+                        });
+                        state.broadcast_message(&msg.to_string());
+                    }
+                    let workspaces = WorkspaceManager::list_workspaces();
+                    state.emit_to_frontend("workspaces_updated", &workspaces);
                 }
             }
             None
@@ -446,27 +726,45 @@ fn process_client_message(
 
         "folder_removed" => {
             if let Some(payload) = message.get("payload") {
-                if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
-                    // Marquer qu'on fait une sauvegarde interne (évite double notification du file_watcher)
-                    state.mark_internal_save();
-                    let result = {
-                        let mut bookmarks = state.bookmarks.write();
-                        if BookmarksManager::remove_folder(&mut bookmarks, id) {
-                            info!("Folder removed from {}: {}", client_id, id);
-                            Some((bookmarks.folders.clone(), bookmarks.clone()))
-                        } else {
-                            None
-                        }
-                    };
+                state.mark_internal_save();
+                let workspace_id = payload.get("workspaceId").and_then(|v| v.as_str()).map(|s| s.to_string())
+                    .or_else(|| state.get_client_workspace(client_id));
+                let Some(ws_id) = workspace_id else { return None; };
 
-                    if let Some((folders, data)) = result {
-                        let broadcast = json!({
-                            "type": "folders_updated",
-                            "payload": { "folders": folders }
+                let source = {
+                    let clients = state.connected_clients.read();
+                    clients.get(client_id)
+                        .and_then(|c| c.browser_instance_id.clone())
+                        .unwrap_or_else(|| client_id.to_string())
+                };
+
+                if let Ok((workspace, conflict)) = WorkspaceManager::apply_workspace_item_change(&ws_id, "folder_removed", payload, &source) {
+                    let broadcast = json!({
+                        "type": "bookmarks_updated",
+                        "payload": {
+                            "workspaceId": ws_id,
+                            "bookmarks": &workspace.bookmarks,
+                            "folders": &workspace.folders,
+                            "version": workspace.version,
+                            "source": format!("browser-{}", source)
+                        }
+                    });
+                    state.broadcast_message(&broadcast.to_string());
+
+                    if let Some(c) = conflict {
+                        let msg = json!({
+                            "type": "conflict_detected",
+                            "payload": {
+                                "workspaceId": ws_id,
+                                "conflictId": c.id,
+                                "syncId": c.sync_id,
+                                "itemType": c.item_type
+                            }
                         });
-                        state.broadcast_message(&broadcast.to_string());
-                        state.emit_to_frontend("bookmarks_updated", &data);
+                        state.broadcast_message(&msg.to_string());
                     }
+                    let workspaces = WorkspaceManager::list_workspaces();
+                    state.emit_to_frontend("workspaces_updated", &workspaces);
                 }
             }
             None
@@ -474,27 +772,45 @@ fn process_client_message(
 
         "folder_changed" => {
             if let Some(payload) = message.get("payload") {
-                if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
-                    // Marquer qu'on fait une sauvegarde interne (évite double notification du file_watcher)
-                    state.mark_internal_save();
-                    let result = {
-                        let mut bookmarks = state.bookmarks.write();
-                        if BookmarksManager::update_folder(&mut bookmarks, id, payload.clone()) {
-                            info!("Folder updated from {}: {}", client_id, id);
-                            Some((bookmarks.folders.clone(), bookmarks.clone()))
-                        } else {
-                            None
-                        }
-                    };
+                state.mark_internal_save();
+                let workspace_id = payload.get("workspaceId").and_then(|v| v.as_str()).map(|s| s.to_string())
+                    .or_else(|| state.get_client_workspace(client_id));
+                let Some(ws_id) = workspace_id else { return None; };
 
-                    if let Some((folders, data)) = result {
-                        let broadcast = json!({
-                            "type": "folders_updated",
-                            "payload": { "folders": folders }
+                let source = {
+                    let clients = state.connected_clients.read();
+                    clients.get(client_id)
+                        .and_then(|c| c.browser_instance_id.clone())
+                        .unwrap_or_else(|| client_id.to_string())
+                };
+
+                if let Ok((workspace, conflict)) = WorkspaceManager::apply_workspace_item_change(&ws_id, "folder_changed", payload, &source) {
+                    let broadcast = json!({
+                        "type": "bookmarks_updated",
+                        "payload": {
+                            "workspaceId": ws_id,
+                            "bookmarks": &workspace.bookmarks,
+                            "folders": &workspace.folders,
+                            "version": workspace.version,
+                            "source": format!("browser-{}", source)
+                        }
+                    });
+                    state.broadcast_message(&broadcast.to_string());
+
+                    if let Some(c) = conflict {
+                        let msg = json!({
+                            "type": "conflict_detected",
+                            "payload": {
+                                "workspaceId": ws_id,
+                                "conflictId": c.id,
+                                "syncId": c.sync_id,
+                                "itemType": c.item_type
+                            }
                         });
-                        state.broadcast_message(&broadcast.to_string());
-                        state.emit_to_frontend("bookmarks_updated", &data);
+                        state.broadcast_message(&msg.to_string());
                     }
+                    let workspaces = WorkspaceManager::list_workspaces();
+                    state.emit_to_frontend("workspaces_updated", &workspaces);
                 }
             }
             None

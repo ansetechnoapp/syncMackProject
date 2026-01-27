@@ -54,6 +54,67 @@ p {
     background-color: #e74c3c;
 }
 
+.workspace-section {
+    margin-bottom: 15px;
+    padding: 10px;
+    background-color: #ecf0f1;
+    border-radius: 8px;
+}
+
+.workspace-section label {
+    font-size: 11px;
+    color: #7f8c8d;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    display: block;
+    margin-bottom: 6px;
+}
+
+.workspace-current {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.workspace-name {
+    font-weight: 600;
+    color: #2c3e50;
+    font-size: 14px;
+}
+
+.workspace-color {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    display: none;
+}
+
+.workspace-section select {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid #bdc3c7;
+    border-radius: 5px;
+    font-size: 13px;
+    background-color: white;
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%237f8c8d' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+}
+
+.workspace-section select:disabled {
+    background-color: #ecf0f1;
+    cursor: not-allowed;
+    color: #95a5a6;
+}
+
+.workspace-section select:focus {
+    outline: none;
+    border-color: #3498db;
+}
+
 .actions {
     display: flex;
     margin-bottom: 15px;

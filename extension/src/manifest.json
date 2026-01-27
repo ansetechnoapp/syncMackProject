@@ -6,7 +6,8 @@
   "description": "Synchronisez vos favoris via un programme compagnon local.",
   "permissions": [
     "bookmarks",
-    "nativeMessaging"
+    "nativeMessaging",
+    "storage"
   ],
   "action": {
     "default_popup": "popup.html",

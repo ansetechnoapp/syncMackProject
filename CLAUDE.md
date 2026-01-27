@@ -16,11 +16,13 @@ SyncMark est une application de synchronisation de favoris entre navigateurs via
 │  │  Backend Rust                                          │ │
 │  │  - WebSocket Server (port 9876)                        │ │
 │  │  - Gestion des favoris (bookmarks.rs)                  │ │
+│  │  - Gestion des Workspaces (workspace.rs)               │ │
 │  │  - Configuration (config.rs)                           │ │
 │  │  - Surveillance fichiers (file_watcher.rs)             │ │
 │  ├────────────────────────────────────────────────────────┤ │
 │  │  Frontend React                                        │ │
 │  │  - Dashboard, Settings, BookmarksList                  │ │
+│  │  - WorkspacesPanel (Gestion des environnements)        │ │
 │  │  - Communication via Tauri Commands                    │ │
 │  └────────────────────────────────────────────────────────┘ │
 └───────────────────────┬─────────────────────────────────────┘
@@ -31,6 +33,7 @@ SyncMark est une application de synchronisation de favoris entre navigateurs via
 │  - Client WebSocket (temps réel)                            │
 │  - Fallback Native Messaging (si desktop fermé)             │
 │  - Listeners: onCreated, onRemoved, onChanged, onMoved      │
+│  - Gestionnaire de changement de workspace                  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -41,6 +44,8 @@ syncMackProject/
 ├── desktop/                    # Application Tauri
 │   ├── src/                    # Frontend React
 │   │   ├── components/         # Composants UI
+│   │   │   ├── WorkspacesPanel.tsx # Gestion des workspaces
+│   │   │   └── ...
 │   │   ├── hooks/              # useTauriCommands.ts
 │   │   └── styles/             # CSS
 │   └── src-tauri/              # Backend Rust
@@ -49,7 +54,8 @@ syncMackProject/
 │           ├── lib.rs          # Configuration Tauri
 │           ├── commands.rs     # Commandes IPC
 │           ├── websocket.rs    # Serveur WebSocket
-│           ├── bookmarks.rs    # Gestion favoris
+│           ├── bookmarks.rs    # Gestion favoris (legacy/shared)
+│           ├── workspace.rs    # Gestion des Workspaces (NOUVEAU)
 │           ├── config.rs       # Configuration
 │           ├── state.rs        # État partagé
 │           └── file_watcher.rs # Surveillance fichiers

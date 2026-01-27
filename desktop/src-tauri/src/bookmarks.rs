@@ -7,25 +7,45 @@ use chrono::Local;
 use uuid::Uuid;
 use crate::config::ConfigManager;
 
+fn uuid_string() -> String {
+    Uuid::new_v4().to_string()
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Bookmark {
     pub id: String,
+    #[serde(default = "uuid_string")]
+    pub sync_id: String,
     pub title: String,
     pub url: String,
     pub parent_id: String,
     pub date_added: Option<i64>,
+    #[serde(default)]
+    pub deleted: bool,
+    #[serde(default)]
+    pub updated_at_lamport: u64,
+    #[serde(default)]
+    pub updated_by: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Folder {
     pub id: String,
+    #[serde(default = "uuid_string")]
+    pub sync_id: String,
     pub title: String,
     pub parent_id: Option<String>,
     #[serde(default)]
     pub children: Vec<Value>, // Keep as Value for incoming tree structure, or strictly ignore in flat structure
     pub date_added: Option<i64>,
+    #[serde(default)]
+    pub deleted: bool,
+    #[serde(default)]
+    pub updated_at_lamport: u64,
+    #[serde(default)]
+    pub updated_by: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -102,20 +122,27 @@ impl BookmarksManager {
             };
 
             let id = obj.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let sync_id = obj.get("syncId").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(uuid_string);
             let title = obj.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let parent_id = obj.get("parentId").and_then(|v| v.as_str()).unwrap_or("1").to_string();
             let date_added = obj.get("dateAdded").and_then(|v| v.as_f64()).map(|f| f as i64); // Chrome sends number
             let url = obj.get("url").and_then(|v| v.as_str()).map(|s| s.to_string());
             let has_children = obj.get("children").and_then(|v| v.as_array()).is_some();
+            let updated_at_lamport = obj.get("updatedAtLamport").and_then(|v| v.as_u64()).unwrap_or(0);
+            let updated_by = obj.get("updatedBy").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
             if let Some(u) = url {
                 if !u.is_empty() {
                     bookmarks.push(Bookmark {
                         id: id.clone(),
+                        sync_id,
                         title: title.clone(),
                         url: u,
                         parent_id: parent_id.clone(),
                         date_added,
+                        deleted: false,
+                        updated_at_lamport,
+                        updated_by: updated_by.clone(),
                     });
                 }
             } else if has_children {
@@ -124,10 +151,14 @@ impl BookmarksManager {
                 if id != "0" && id != "1" && id != "2" {
                     folders.push(Folder {
                         id,
+                        sync_id,
                         title,
                         parent_id: Some(parent_id),
                         children: vec![], // Flattened, so children are not stored here
                         date_added,
+                        deleted: false,
+                        updated_at_lamport,
+                        updated_by,
                     });
                 }
             }
@@ -188,6 +219,18 @@ impl BookmarksManager {
         let path = ConfigManager::get_bookmarks_path();
 
         if !path.exists() {
+            // Check for backup if main file missing
+            let bak_path = path.with_extension("bak");
+            if bak_path.exists() {
+                warn!("Main bookmarks file missing, attempting to load from backup");
+                if let Ok(content) = fs::read_to_string(&bak_path) {
+                    if let Ok(data) = serde_json::from_str::<BookmarksData>(&content) {
+                        // Restore backup to main
+                        let _ = fs::copy(&bak_path, &path);
+                        return data;
+                    }
+                }
+            }
             return BookmarksData::default();
         }
 
@@ -196,27 +239,29 @@ impl BookmarksManager {
                 match serde_json::from_str::<BookmarksData>(&content) {
                     Ok(data) => data,
                     Err(e) => {
-                         // Try to recover from legacy format if possible or just log error
-                         warn!("Failed to parse bookmarks data (strict type): {}, trying legacy...", e);
-                         match serde_json::from_str::<Value>(&content) {
-                            Ok(v) => {
-                                if let Some(_arr) = v.as_array() {
-                                     // Very old legacy: just an array of bookmarks?
-                                     warn!("Loaded legacy array format, dropping data to convert to new structure");
-                                     BookmarksData::default() 
-                                } else {
-                                     // Maybe it was BookmarksData but with Values?
-                                     // It's hard to auto-convert without complex logic. 
-                                     // For now, return default to avoid crashing.
-                                     error!("Could not recover bookmarks format.");
-                                     BookmarksData::default()
-                                }
-                            },
-                             Err(_) => {
-                                 error!("Failed to parse bookmarks file completely.");
-                                 BookmarksData::default()
-                            }
+                         warn!("Failed to parse bookmarks data: {}, trying backup...", e);
+                         
+                         // Try loading backup
+                         let bak_path = path.with_extension("bak");
+                         if bak_path.exists() {
+                             if let Ok(bak_content) = fs::read_to_string(&bak_path) {
+                                 if let Ok(bak_data) = serde_json::from_str::<BookmarksData>(&bak_content) {
+                                     warn!("Successfully recovered from backup");
+                                     // Preserve corrupt file for debugging
+                                     let corrupt_path = path.with_extension("corrupt");
+                                     let _ = fs::rename(&path, &corrupt_path);
+                                     // Restore backup
+                                     let _ = fs::copy(&bak_path, &path);
+                                     return bak_data;
+                                 }
+                             }
                          }
+
+                         // If backup failed or didn't exist, preserve corrupt file
+                         let corrupt_path = path.with_extension("corrupt");
+                         let _ = fs::rename(&path, &corrupt_path);
+                         error!("Could not recover bookmarks. Corrupt file saved to {:?}", corrupt_path);
+                         BookmarksData::default()
                     }
                 }
             },
@@ -230,6 +275,8 @@ impl BookmarksManager {
     pub fn save_bookmarks(data: &mut BookmarksData) -> bool {
         ConfigManager::ensure_sync_dir();
         let path = ConfigManager::get_bookmarks_path();
+        let temp_path = path.with_extension("tmp");
+        let bak_path = path.with_extension("bak");
 
         data.last_updated = Some(Local::now().to_rfc3339());
         data.metadata.total_bookmarks = data.bookmarks.len();
@@ -237,12 +284,45 @@ impl BookmarksManager {
 
         match serde_json::to_string_pretty(data) {
             Ok(content) => {
-                if let Err(e) = fs::write(path, content) {
-                    error!("Failed to write bookmarks file: {}", e);
-                    false
-                } else {
-                    info!("Bookmarks saved: {} items", data.bookmarks.len());
-                    true
+                // 1. Write to temp file first (Atomic Write Step 1)
+                if let Err(e) = fs::write(&temp_path, &content) {
+                    error!("Failed to write bookmarks temp file: {}", e);
+                    return false;
+                }
+
+                // 2. Create backup of existing file if it exists
+                if path.exists() {
+                    // We ignore errors here because the backup is a "nice to have" safety net,
+                    // but if it fails (e.g. permissions), we might still want to proceed with save?
+                    // Or maybe we want to fail safe?
+                    // Let's try to rename. If rename fails (e.g. locked), we might have issues replacing anyway.
+                    // On Windows, fs::rename fails if target exists. So we MUST move the old file away.
+                    if let Err(e) = fs::rename(&path, &bak_path) {
+                        warn!("Failed to create backup (rename old file): {}", e);
+                        // If we can't move the old file, we likely can't replace it either.
+                        // Attempt to remove it?
+                         if let Err(rm_e) = fs::remove_file(&path) {
+                             error!("Failed to remove old file for replacement: {}", rm_e);
+                             // If we can't remove it, we can't save.
+                             return false;
+                         }
+                    }
+                }
+
+                // 3. Rename temp to actual file (Atomic Write Step 2)
+                match fs::rename(&temp_path, &path) {
+                    Ok(_) => {
+                        info!("Bookmarks saved: {} items (backup created)", data.bookmarks.len());
+                        true
+                    },
+                    Err(e) => {
+                        error!("Failed to commit bookmarks file (rename temp -> final): {}", e);
+                        // Attempt to restore backup if we moved it
+                        if bak_path.exists() && !path.exists() {
+                            let _ = fs::rename(&bak_path, &path);
+                        }
+                        false
+                    }
                 }
             },
             Err(e) => {
@@ -257,12 +337,39 @@ impl BookmarksManager {
     /// On remplace complètement les données locales par celles de l'extension.
     pub fn merge_bookmarks(local_data: &mut BookmarksData, extension_bookmarks: Vec<Bookmark>) -> Vec<Bookmark> {
         // Validation: filter out empty URLs
-        let valid_bookmarks: Vec<Bookmark> = extension_bookmarks
+        let mut valid_bookmarks: Vec<Bookmark> = extension_bookmarks
             .into_iter()
             .filter(|b| !b.url.is_empty())
             .collect();
 
-        info!("Sync: replacing {} local bookmarks with {} from extension",
+        // Tenter de préserver les sync_id existants en faisant correspondre par (URL, Parent)
+        // Ceci évite de régénérer des UUIDs à chaque synchronisation complète
+        let mut local_map: HashMap<(String, String), &Bookmark> = HashMap::new();
+        for b in &local_data.bookmarks {
+            local_map.insert((b.url.clone(), b.parent_id.clone()), b);
+        }
+
+        for b in &mut valid_bookmarks {
+            // Clé de correspondance: URL + ParentID
+            // Note: ParentID peut différer si l'extension utilise des IDs Chrome et nous des UUIDs...
+            // Mais ici flatten_chrome_tree a déjà normalisé les parentIds (ou pas?)
+            // flatten_chrome_tree met les IDs Chrome.
+            // Si local_data a des IDs Chrome, ça marche.
+            // Si local_data a des UUIDs (générés par nous), et incoming a des IDs Chrome...
+            // La correspondance est difficile si les IDs changent.
+            // Mais pour l'instant, le desktop stocke ce que l'extension envoie.
+            // Donc si l'extension envoie les mêmes données, URL+Parent devraient matcher.
+            
+            if let Some(local) = local_map.get(&(b.url.clone(), b.parent_id.clone())) {
+                b.sync_id = local.sync_id.clone();
+                b.updated_at_lamport = local.updated_at_lamport;
+                b.updated_by = local.updated_by.clone();
+                // On ne reprend pas 'deleted' car si c'est dans valid_bookmarks, c'est que ça existe dans Chrome
+                // Donc ce n'est pas supprimé.
+            }
+        }
+
+        info!("Sync: replacing {} local bookmarks with {} from extension (preserving identities)",
               local_data.bookmarks.len(), valid_bookmarks.len());
 
         local_data.bookmarks = valid_bookmarks.clone();
@@ -270,10 +377,26 @@ impl BookmarksManager {
     }
 
     pub fn merge_folders(local_data: &mut BookmarksData, extension_folders: Vec<Folder>) -> Vec<Folder> {
-        info!("Sync: replacing {} local folders with {} from extension",
-              local_data.folders.len(), extension_folders.len());
-        local_data.folders = extension_folders.clone();
-        extension_folders
+        let mut incoming = extension_folders;
+
+        // Tenter de préserver les sync_id existants pour les dossiers
+        let mut local_map: HashMap<(String, Option<String>), &Folder> = HashMap::new();
+        for f in &local_data.folders {
+            local_map.insert((f.title.clone(), f.parent_id.clone()), f);
+        }
+
+        for f in &mut incoming {
+            if let Some(local) = local_map.get(&(f.title.clone(), f.parent_id.clone())) {
+                f.sync_id = local.sync_id.clone();
+                f.updated_at_lamport = local.updated_at_lamport;
+                f.updated_by = local.updated_by.clone();
+            }
+        }
+
+        info!("Sync: replacing {} local folders with {} from extension (preserving identities)",
+              local_data.folders.len(), incoming.len());
+        local_data.folders = incoming.clone();
+        incoming
     }
 
     pub fn add_bookmark(data: &mut BookmarksData, bookmark_val: Value) -> bool {
@@ -294,14 +417,18 @@ impl BookmarksManager {
 
              let b = Bookmark {
                  id,
+                 sync_id: obj.get("syncId").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(uuid_string),
                  title: obj.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                  url: url.to_string(),
                  parent_id: obj.get("parentId").and_then(|v| v.as_str()).unwrap_or("1").to_string(),
                  date_added: obj.get("dateAdded").and_then(|v| v.as_i64()).or_else(|| Some(chrono::Utc::now().timestamp_millis())),
+                 deleted: false,
+                 updated_at_lamport: 0,
+                 updated_by: "".to_string(),
              };
              return Self::add_bookmark_struct(data, b);
-         }
-         false
+        }
+        false
     }
 
     pub fn add_bookmark_struct(data: &mut BookmarksData, bookmark: Bookmark) -> bool {
@@ -368,10 +495,14 @@ impl BookmarksManager {
 
             let f = Folder {
                 id,
+                sync_id: obj.get("syncId").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(uuid_string),
                 title: obj.get("title").and_then(|v| v.as_str()).unwrap_or("New Folder").to_string(),
                 parent_id: obj.get("parentId").and_then(|v| v.as_str()).map(|s| s.to_string()),
                 children: vec![],
                 date_added: obj.get("dateAdded").and_then(|v| v.as_i64()),
+                deleted: false,
+                updated_at_lamport: 0,
+                updated_by: "".to_string(),
             };
             return Self::add_folder_struct(data, f);
         }
@@ -398,7 +529,16 @@ impl BookmarksManager {
     }
 
     pub fn remove_folder(data: &mut BookmarksData, folder_id: &str) -> bool {
+        if Self::remove_folder_recursive(data, folder_id) {
+            info!("Folder removed (recursive): {}", folder_id);
+            return Self::save_bookmarks(data);
+        }
+        false
+    }
+
+    fn remove_folder_recursive(data: &mut BookmarksData, folder_id: &str) -> bool {
         let initial_len = data.folders.len();
+        let initial_bm_len = data.bookmarks.len();
 
         data.folders.retain(|f| f.id != folder_id);
         
@@ -410,14 +550,11 @@ impl BookmarksManager {
             .collect();
 
         for child_id in child_folder_ids {
-            Self::remove_folder(data, &child_id);
+            Self::remove_folder_recursive(data, &child_id);
         }
 
-        if data.folders.len() != initial_len {
-            info!("Folder removed: {}", folder_id);
-            return Self::save_bookmarks(data);
-        }
-        false
+        // Return true if any folder or bookmark was removed
+        data.folders.len() != initial_len || data.bookmarks.len() != initial_bm_len
     }
 
     pub fn update_folder(data: &mut BookmarksData, folder_id: &str, updated: Value) -> bool {
@@ -589,10 +726,14 @@ mod tests {
     fn make_bookmark(id: &str, title: &str, url: &str, parent_id: &str) -> Bookmark {
         Bookmark {
             id: id.to_string(),
+            sync_id: Uuid::new_v4().to_string(),
             title: title.to_string(),
             url: url.to_string(),
             parent_id: parent_id.to_string(),
             date_added: Some(chrono::Utc::now().timestamp_millis()),
+            deleted: false,
+            updated_at_lamport: 0,
+            updated_by: "test".to_string(),
         }
     }
 
@@ -600,10 +741,14 @@ mod tests {
     fn make_folder(id: &str, title: &str, parent_id: Option<&str>) -> Folder {
         Folder {
             id: id.to_string(),
+            sync_id: Uuid::new_v4().to_string(),
             title: title.to_string(),
             parent_id: parent_id.map(|s| s.to_string()),
             children: vec![],
             date_added: Some(chrono::Utc::now().timestamp_millis()),
+            deleted: false,
+            updated_at_lamport: 0,
+            updated_by: "test".to_string(),
         }
     }
 
@@ -762,10 +907,14 @@ mod tests {
         let mut data = BookmarksData::default();
         data.bookmarks.push(Bookmark {
             id: "b1".to_string(),
+            sync_id: "sync-b1".to_string(),
             title: "Original".to_string(),
             url: "https://original.com".to_string(),
             parent_id: "1".to_string(),
             date_added: Some(1234567890),
+            deleted: false,
+            updated_at_lamport: 0,
+            updated_by: "test".to_string(),
         });
 
         // Simuler la mise à jour
