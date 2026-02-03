@@ -20,7 +20,11 @@
       "Bash(bun run build)",
       "Bash(bun run type-check:*)",
       "Bash(bun tsc:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(cargo build:*)",
+      "Bash(bun add:*)",
+      "Bash(npx tauri build --no-bundle)",
+      "Bash(bun run tauri build:*)"
     ]
   }
 }

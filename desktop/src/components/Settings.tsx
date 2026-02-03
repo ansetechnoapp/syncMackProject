@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   getConfig,
   saveConfig,
@@ -8,6 +9,7 @@ import {
   importWorkspaceFromFile,
   createBackup,
   restoreBackup,
+  checkForUpdates,
   type WorkspaceSummary,
   type Config,
 } from "../hooks/useTauriCommands";
@@ -27,6 +29,8 @@ function Settings() {
   const [backupResult, setBackupResult] = useState<string>("");
   const [restorePath, setRestorePath] = useState<string>("");
   const [restoreResult, setRestoreResult] = useState<string>("");
+  const [updateStatus, setUpdateStatus] = useState<string>("");
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
 
   const loadData = async () => {
     setLoading(true);
@@ -83,6 +87,20 @@ function Settings() {
     }
   };
 
+  const handlePickImportFile = async () => {
+    try {
+      const selected = await open({
+        filters: [{ name: "JSON", extensions: ["json"] }],
+        multiple: false,
+      });
+      if (selected) {
+        setImportPath(selected as string);
+      }
+    } catch (e) {
+      console.error("Erreur sélection fichier:", e);
+    }
+  };
+
   const handleImportWorkspace = async () => {
     if (!importPath.trim()) return;
     try {
@@ -107,6 +125,20 @@ function Settings() {
     }
   };
 
+  const handlePickRestoreFile = async () => {
+    try {
+      const selected = await open({
+        filters: [{ name: "JSON", extensions: ["json"] }],
+        multiple: false,
+      });
+      if (selected) {
+        setRestorePath(selected as string);
+      }
+    } catch (e) {
+      console.error("Erreur sélection fichier:", e);
+    }
+  };
+
   const handleRestore = async () => {
     if (!restorePath.trim()) return;
     try {
@@ -117,6 +149,23 @@ function Settings() {
       await loadData();
     } catch (e) {
       setMessage({ type: "error", text: `Erreur restauration: ${e}` });
+    }
+  };
+
+  const handleCheckUpdates = async () => {
+    setCheckingUpdate(true);
+    setUpdateStatus("");
+    try {
+      const version = await checkForUpdates();
+      if (version) {
+        setUpdateStatus(`Nouvelle version disponible : ${version}`);
+      } else {
+        setUpdateStatus("Aucune mise à jour disponible");
+      }
+    } catch (e) {
+      setUpdateStatus(`Erreur : ${e}`);
+    } finally {
+      setCheckingUpdate(false);
     }
   };
 
@@ -319,14 +368,11 @@ function Settings() {
             </span>
           </div>
           <div className="inline-controls">
-            <input
-              className="input-text"
-              type="text"
-              placeholder="Chemin du fichier JSON"
-              value={importPath}
-              onChange={(e) => setImportPath(e.target.value)}
-            />
-            <button className="btn btn-primary" onClick={handleImportWorkspace}>
+            <button className="btn btn-secondary" onClick={handlePickImportFile}>
+              Parcourir...
+            </button>
+            {importPath && <span className="setting-description" style={{ fontSize: 11 }}>{importPath}</span>}
+            <button className="btn btn-primary" onClick={handleImportWorkspace} disabled={!importPath.trim()}>
               Importer
             </button>
           </div>
@@ -358,19 +404,33 @@ function Settings() {
             </span>
           </div>
           <div className="inline-controls">
-            <input
-              className="input-text"
-              type="text"
-              placeholder="Chemin du backup JSON"
-              value={restorePath}
-              onChange={(e) => setRestorePath(e.target.value)}
-            />
-            <button className="btn btn-primary" onClick={handleRestore}>
+            <button className="btn btn-secondary" onClick={handlePickRestoreFile}>
+              Parcourir...
+            </button>
+            {restorePath && <span className="setting-description" style={{ fontSize: 11 }}>{restorePath}</span>}
+            <button className="btn btn-primary" onClick={handleRestore} disabled={!restorePath.trim()}>
               Restaurer
             </button>
           </div>
         </div>
         {restoreResult && <div className="setting-hint">Backup pré-restauration: {restoreResult}</div>}
+      </div>
+
+      <div className="settings-section">
+        <h3>Mises à jour</h3>
+
+        <div className="setting-item">
+          <div className="setting-info">
+            <label>Vérifier les mises à jour</label>
+            <span className="setting-description">
+              Recherche de nouvelles versions de SyncMark
+            </span>
+          </div>
+          <button className="btn btn-primary" onClick={handleCheckUpdates} disabled={checkingUpdate}>
+            {checkingUpdate ? "Vérification..." : "Vérifier"}
+          </button>
+        </div>
+        {updateStatus && <div className="setting-hint">{updateStatus}</div>}
       </div>
 
       <div className="settings-actions">

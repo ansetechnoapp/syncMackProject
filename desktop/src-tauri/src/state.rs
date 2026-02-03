@@ -8,7 +8,15 @@ use tauri::{AppHandle, Emitter};
 use log::info;
 use crate::config::Config;
 use crate::bookmarks::BookmarksData;
-use crate::workspace::{WorkspacesIndex, WorkspaceManager};
+use crate::workspace::{Workspace, WorkspacesIndex, WorkspaceManager};
+use crate::sync_log::SyncLog;
+
+/// Message broadcast avec filtrage optionnel par workspace
+#[derive(Clone, Debug)]
+pub struct BroadcastMessage {
+    pub payload: String,
+    pub target_workspace_id: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectedClient {
@@ -49,12 +57,18 @@ pub struct AppState {
     pub bookmarks: RwLock<BookmarksData>,
     pub sync_status: RwLock<SyncStatus>,
     pub connected_clients: RwLock<HashMap<String, ConnectedClient>>,
-    pub websocket_tx: RwLock<Option<tokio::sync::broadcast::Sender<String>>>,
+    pub websocket_tx: RwLock<Option<tokio::sync::broadcast::Sender<BroadcastMessage>>>,
     pub app_handle: RwLock<Option<AppHandle>>,
     /// Flag pour ignorer le prochain changement de fichier (évite double notification)
     pub skip_file_change: AtomicBool,
     /// Index des workspaces
     pub workspaces_index: RwLock<WorkspacesIndex>,
+    /// Locks par workspace pour protéger les opérations concurrentes (load → modify → save)
+    pub workspace_locks: RwLock<HashMap<String, Arc<parking_lot::Mutex<()>>>>,
+    /// Cache mémoire des workspaces (évite les lectures disque répétées)
+    pub workspace_cache: RwLock<HashMap<String, Workspace>>,
+    /// Historique de synchronisation
+    pub sync_log: RwLock<SyncLog>,
 }
 
 impl AppState {
@@ -65,6 +79,8 @@ impl AppState {
         // Charger l'index des workspaces
         let workspaces_index = WorkspaceManager::load_index();
 
+        let sync_log = SyncLog::load();
+
         Self {
             config: RwLock::new(config),
             bookmarks: RwLock::new(bookmarks),
@@ -74,7 +90,18 @@ impl AppState {
             app_handle: RwLock::new(None),
             skip_file_change: AtomicBool::new(false),
             workspaces_index: RwLock::new(workspaces_index),
+            workspace_locks: RwLock::new(HashMap::new()),
+            workspace_cache: RwLock::new(HashMap::new()),
+            sync_log: RwLock::new(sync_log),
         }
+    }
+
+    /// Obtient le lock d'un workspace (crée le lock si nécessaire)
+    pub fn get_workspace_lock(&self, workspace_id: &str) -> Arc<parking_lot::Mutex<()>> {
+        let mut locks = self.workspace_locks.write();
+        locks.entry(workspace_id.to_string())
+            .or_insert_with(|| Arc::new(parking_lot::Mutex::new(())))
+            .clone()
     }
 
     /// Marque qu'une sauvegarde interne va avoir lieu (le file_watcher doit ignorer)
@@ -158,9 +185,23 @@ impl AppState {
         self.emit_to_frontend("sync_status_updated", &status_clone);
     }
 
+    /// Envoie un message à tous les clients (global)
     pub fn broadcast_message(&self, message: &str) {
         if let Some(tx) = self.websocket_tx.read().as_ref() {
-            let _ = tx.send(message.to_string());
+            let _ = tx.send(BroadcastMessage {
+                payload: message.to_string(),
+                target_workspace_id: None,
+            });
+        }
+    }
+
+    /// Envoie un message uniquement aux clients du workspace spécifié
+    pub fn send_to_workspace(&self, workspace_id: &str, message: &str) {
+        if let Some(tx) = self.websocket_tx.read().as_ref() {
+            let _ = tx.send(BroadcastMessage {
+                payload: message.to_string(),
+                target_workspace_id: Some(workspace_id.to_string()),
+            });
         }
     }
 
@@ -199,15 +240,45 @@ impl AppState {
 
     /// Recharge l'index des workspaces depuis le disque
     pub fn reload_workspaces_index(&self) {
+        let _guard = crate::workspace::index_lock().lock();
         let index = WorkspaceManager::load_index();
         *self.workspaces_index.write() = index;
     }
 
     /// Envoie un message à un client spécifique (via broadcast avec filtre côté réception)
     pub fn send_to_client(&self, _client_id: &str, message: &str) {
-        // Pour l'instant on broadcast, le filtrage se fera côté réception
-        // Une amélioration future serait d'avoir des channels par client
         self.broadcast_message(message);
+    }
+
+    // ==================== Cache Workspaces ====================
+
+    /// Charge un workspace depuis le cache, ou depuis le disque si absent
+    pub fn load_workspace_cached(&self, id: &str) -> Result<Workspace, String> {
+        // Vérifier le cache d'abord
+        if let Some(ws) = self.workspace_cache.read().get(id) {
+            return Ok(ws.clone());
+        }
+        // Fallback disque
+        let ws = WorkspaceManager::load_workspace(id)?;
+        self.workspace_cache.write().insert(id.to_string(), ws.clone());
+        Ok(ws)
+    }
+
+    /// Sauvegarde un workspace sur disque et met à jour le cache
+    pub fn save_workspace_cached(&self, workspace: &Workspace) -> Result<(), String> {
+        WorkspaceManager::save_workspace(workspace)?;
+        self.workspace_cache.write().insert(workspace.id.clone(), workspace.clone());
+        Ok(())
+    }
+
+    /// Invalide le cache pour un workspace (après suppression par ex.)
+    pub fn invalidate_workspace_cache(&self, id: &str) {
+        self.workspace_cache.write().remove(id);
+    }
+
+    /// Met à jour le cache avec un workspace retourné par une opération
+    pub fn update_workspace_cache(&self, workspace: &Workspace) {
+        self.workspace_cache.write().insert(workspace.id.clone(), workspace.clone());
     }
 }
 

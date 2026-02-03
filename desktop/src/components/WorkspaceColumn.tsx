@@ -1,23 +1,34 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useDroppable } from '@dnd-kit/core';
 import { listen } from '@tauri-apps/api/event';
-import { getWorkspaceTree, BookmarksTree, TreeNode } from '../hooks/useTauriCommands';
-import { BookmarkItem, BookmarkNode } from './BookmarkItem';
+import { Virtuoso } from 'react-virtuoso';
+import { getWorkspaceTree, BookmarksTree, ConnectedClient, WorkspaceAssignment } from '../hooks/useTauriCommands';
+import { BookmarkItem } from './BookmarkItem';
+import type { BookmarkNode } from './BookmarkItem';
+import { flattenBookmarkTree } from '../utils/bookmarkUtils';
 
 interface WorkspaceColumnProps {
   workspaceId: string;
   title: string;
   color: string;
+  clients: ConnectedClient[];
+  assignments: WorkspaceAssignment[];
+  onAssignBrowser: (browserId: string) => void;
+  onUnassignBrowser: (browserId: string) => void;
   onEditBookmark: (wsId: string, bId: string) => void;
   onDeleteBookmark: (wsId: string, bId: string) => void;
   onAddBookmark: (wsId: string) => void;
   onAddFolder: (wsId: string) => void;
 }
 
-export default function WorkspaceColumn({ 
-  workspaceId, 
-  title, 
+export default function WorkspaceColumn({
+  workspaceId,
+  title,
   color,
+  clients,
+  assignments,
+  onAssignBrowser,
+  onUnassignBrowser,
   onEditBookmark,
   onDeleteBookmark,
   onAddBookmark,
@@ -80,23 +91,22 @@ export default function WorkspaceColumn({
     };
   }, [loadDataCallback]);
 
-  // Flatten the tree for the column view
-  const getAllBookmarks = (nodes: TreeNode[]): BookmarkNode[] => {
-    let result: BookmarkNode[] = [];
-    for (const node of nodes) {
-      if (node.id) {
-        result.push(node as BookmarkNode);
-      }
-      if (node.isFolder && node.children) {
-        result = [...result, ...getAllBookmarks(node.children)];
-      }
-    }
-    return result;
-  };
-
-  const bookmarks = tree ? getAllBookmarks(tree.items) : [];
+  const bookmarks = tree ? flattenBookmarkTree(tree.items) : [];
   const folderCount = tree?.total_folders || 0;
   const bookmarkCount = tree?.total_bookmarks || bookmarks.length;
+
+  // Trouver le navigateur assigné à ce workspace
+  const assignedBrowser = assignments.find(a => a.workspace_id === workspaceId);
+  const assignedBrowserId = assignedBrowser?.browser_id || "";
+
+  const handleBrowserChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const value = e.target.value;
+    if (value) {
+      onAssignBrowser(value);
+    } else if (assignedBrowserId) {
+      onUnassignBrowser(assignedBrowserId);
+    }
+  };
 
   return (
     <div className="workspace-column" style={{ borderTop: `4px solid ${color}` }}>
@@ -107,16 +117,36 @@ export default function WorkspaceColumn({
                 {bookmarkCount} fav, {folderCount} dos
             </span>
         </div>
+        <div style={{ marginBottom: '6px' }}>
+            <select
+                value={assignedBrowserId}
+                onChange={handleBrowserChange}
+                className="browser-select-compact"
+            >
+                <option value="">-- Aucun navigateur --</option>
+                {clients.map(client => {
+                    const browserId = client.browser_instance_id;
+                    const label = (!client.browser || client.browser === "Unknown" || client.browser === "Unknown Browser")
+                        ? "Navigateur Inconnu"
+                        : client.browser;
+                    return (
+                        <option key={client.id} value={browserId}>
+                            {label}
+                        </option>
+                    );
+                })}
+            </select>
+        </div>
         <div style={{ display: 'flex', gap: '5px' }}>
-            <button 
-                className="btn-xs btn-outline" 
+            <button
+                className="btn-xs btn-outline"
                 onClick={() => onAddBookmark(workspaceId)}
                 title="Ajouter un favori"
             >
                 + Favori
             </button>
-            <button 
-                className="btn-xs btn-outline" 
+            <button
+                className="btn-xs btn-outline"
                 onClick={() => onAddFolder(workspaceId)}
                 title="Ajouter un dossier"
             >
@@ -125,15 +155,16 @@ export default function WorkspaceColumn({
         </div>
       </div>
       
-      <div 
-        ref={setNodeRef} 
+      <div
+        ref={setNodeRef}
         className={`column-body ${isOver ? 'is-over' : ''}`}
+        style={{ flex: 1, minHeight: 0 }}
       >
         {loading ? (
           <div className="loading-spinner">...</div>
         ) : bookmarks.length === 0 ? (
           <div className="empty-state-small">Vide</div>
-        ) : (
+        ) : bookmarks.length <= 30 ? (
           <div className="bookmarks-list">
             {bookmarks.map(node => (
               <BookmarkItem
@@ -146,6 +177,22 @@ export default function WorkspaceColumn({
               />
             ))}
           </div>
+        ) : (
+          <Virtuoso
+            style={{ height: '100%' }}
+            data={bookmarks}
+            overscan={10}
+            itemContent={(_index: number, node: BookmarkNode) => (
+              <BookmarkItem
+                key={node.id}
+                node={node}
+                workspaceId={workspaceId}
+                onEdit={(id) => onEditBookmark(workspaceId, id)}
+                onDelete={(id) => onDeleteBookmark(workspaceId, id)}
+                isCompact={true}
+              />
+            )}
+          />
         )}
       </div>
     </div>

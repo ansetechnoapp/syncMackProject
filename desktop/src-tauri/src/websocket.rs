@@ -10,7 +10,7 @@ use log::{error, info, warn};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::state::{SharedState, ConnectedClient};
+use crate::state::{SharedState, ConnectedClient, BroadcastMessage};
 use crate::bookmarks::BookmarksManager;
 use crate::workspace::WorkspaceManager;
 
@@ -40,7 +40,7 @@ pub async fn start_websocket_server(state: SharedState, port: u16) {
     };
 
     // Create broadcast channel for sending messages to all clients
-    let (tx, _) = broadcast::channel::<String>(100);
+    let (tx, _) = broadcast::channel::<BroadcastMessage>(100);
     *state.websocket_tx.write() = Some(tx.clone());
 
     loop {
@@ -77,7 +77,7 @@ async fn handle_connection(
     stream: TcpStream,
     addr: SocketAddr,
     state: SharedState,
-    mut broadcast_rx: broadcast::Receiver<String>,
+    mut broadcast_rx: broadcast::Receiver<BroadcastMessage>,
 ) {
     let callback = |req: &tokio_tungstenite::tungstenite::handshake::server::Request, response: tokio_tungstenite::tungstenite::handshake::server::Response| {
         let headers = req.headers();
@@ -172,7 +172,15 @@ async fn handle_connection(
             }
             broadcast_msg = broadcast_rx.recv() => {
                 if let Ok(msg) = broadcast_msg {
-                    if ws_sender.send(Message::Text(msg.into())).await.is_err() {
+                    // Filtrage par workspace : si le message cible un workspace spécifique,
+                    // ne l'envoyer qu'aux clients qui y sont assignés
+                    if let Some(ref target_ws) = msg.target_workspace_id {
+                        let client_ws = state.get_client_workspace(&client_id);
+                        if client_ws.as_deref() != Some(target_ws) {
+                            continue;
+                        }
+                    }
+                    if ws_sender.send(Message::Text(msg.payload.into())).await.is_err() {
                         break;
                     }
                 }
@@ -243,6 +251,17 @@ fn is_valid_message(message: &Value) -> bool {
     }
 }
 
+fn log_sync_entry(state: &SharedState, operation_type: &str, source: &str, workspace_id: Option<&str>, items_count: usize, success: bool, error_message: Option<&str>) {
+    state.sync_log.write().add_entry(
+        operation_type,
+        source,
+        workspace_id,
+        items_count,
+        success,
+        error_message.map(|s| s.to_string()),
+    );
+}
+
 // Synchronous message processing to avoid holding locks across await
 fn process_client_message(
     state: &SharedState,
@@ -307,11 +326,13 @@ fn process_client_message(
 
                     if let Some(ws_id) = workspace_id {
                         // Workspace existant : synchroniser avec le workspace
+                        let _lock_arc = state.get_workspace_lock(&ws_id);
+                let _lock = _lock_arc.lock();
                         match WorkspaceManager::sync_bookmarks_to_workspace(&ws_id, incoming_bookmarks.clone(), incoming_folders.clone()) {
                             Ok(workspace) => {
                                 info!("Workspace '{}' synced from {}: {} bookmarks", workspace.name, client_id, workspace.bookmarks.len());
+                                state.update_workspace_cache(&workspace);
 
-                                // Broadcast aux autres clients qui ont le même workspace
                                 let broadcast = json!({
                                     "type": "bookmarks_updated",
                                     "payload": {
@@ -322,9 +343,10 @@ fn process_client_message(
                                         "source": format!("browser-{}", browser_name)
                                     }
                                 });
-                                state.broadcast_message(&broadcast.to_string());
+                                state.send_to_workspace(&ws_id, &broadcast.to_string());
 
                                 state.update_sync_complete(true, None);
+                                log_sync_entry(state, "sync_bookmarks", &format!("browser-{}", browser_name), Some(&ws_id), workspace.bookmarks.len(), true, None);
 
                                 // Notifier le frontend
                                 let workspaces = WorkspaceManager::list_workspaces();
@@ -343,6 +365,7 @@ fn process_client_message(
                             }
                             Err(e) => {
                                 state.update_sync_complete(false, Some(e.clone()));
+                                log_sync_entry(state, "sync_bookmarks", &format!("browser-{}", browser_name), Some(&ws_id), 0, false, Some(&e));
                                 return Some(json!({
                                     "type": "sync_complete",
                                     "payload": { "success": false, "error": e }
@@ -359,11 +382,11 @@ fn process_client_message(
                         ) {
                             Ok(workspace) => {
                                 info!("New workspace '{}' created from {}", workspace.name, browser_name);
-
-                                // Mettre à jour le state du client
+                                state.update_workspace_cache(&workspace);
                                 state.update_client_workspace(client_id, Some(workspace.id.clone()));
 
                                 state.update_sync_complete(true, None);
+                                log_sync_entry(state, "sync_bookmarks", &format!("browser-{}", browser_name), Some(&workspace.id), workspace.bookmarks.len(), true, None);
 
                                 // Notifier le frontend
                                 let workspaces = WorkspaceManager::list_workspaces();
@@ -383,6 +406,7 @@ fn process_client_message(
                             }
                             Err(e) => {
                                 state.update_sync_complete(false, Some(e.clone()));
+                                log_sync_entry(state, "sync_bookmarks", &format!("browser-{}", browser_name), None, 0, false, Some(&e));
                                 return Some(json!({
                                     "type": "sync_complete",
                                     "payload": { "success": false, "error": e }
@@ -409,7 +433,11 @@ fn process_client_message(
                         .unwrap_or_else(|| client_id.to_string())
                 };
 
+                let _lock_arc = state.get_workspace_lock(&ws_id);
+                let _lock = _lock_arc.lock();
                 if let Ok((workspace, conflict)) = WorkspaceManager::apply_workspace_item_change(&ws_id, "bookmark_created", payload, &source) {
+                    state.update_workspace_cache(&workspace);
+                    log_sync_entry(state, "bookmark_created", &source, Some(&ws_id), 1, true, None);
                     let broadcast = json!({
                         "type": "bookmarks_updated",
                         "payload": {
@@ -420,19 +448,21 @@ fn process_client_message(
                             "source": format!("browser-{}", source)
                         }
                     });
-                    state.broadcast_message(&broadcast.to_string());
+                    state.send_to_workspace(&ws_id, &broadcast.to_string());
 
                     if let Some(c) = conflict {
+                        let conflict_payload = json!({
+                            "workspaceId": ws_id,
+                            "conflictId": c.id,
+                            "syncId": c.sync_id,
+                            "itemType": c.item_type
+                        });
                         let msg = json!({
                             "type": "conflict_detected",
-                            "payload": {
-                                "workspaceId": ws_id,
-                                "conflictId": c.id,
-                                "syncId": c.sync_id,
-                                "itemType": c.item_type
-                            }
+                            "payload": &conflict_payload
                         });
-                        state.broadcast_message(&msg.to_string());
+                        state.send_to_workspace(&ws_id, &msg.to_string());
+                        state.emit_to_frontend("conflict_detected", &conflict_payload);
                     }
 
                     let workspaces = WorkspaceManager::list_workspaces();
@@ -456,7 +486,11 @@ fn process_client_message(
                         .unwrap_or_else(|| client_id.to_string())
                 };
 
+                let _lock_arc = state.get_workspace_lock(&ws_id);
+                let _lock = _lock_arc.lock();
                 if let Ok((workspace, conflict)) = WorkspaceManager::apply_workspace_item_change(&ws_id, "bookmark_removed", payload, &source) {
+                    state.update_workspace_cache(&workspace);
+                    log_sync_entry(state, "bookmark_removed", &source, Some(&ws_id), 1, true, None);
                     let broadcast = json!({
                         "type": "bookmarks_updated",
                         "payload": {
@@ -467,19 +501,18 @@ fn process_client_message(
                             "source": format!("browser-{}", source)
                         }
                     });
-                    state.broadcast_message(&broadcast.to_string());
+                    state.send_to_workspace(&ws_id, &broadcast.to_string());
 
                     if let Some(c) = conflict {
-                        let msg = json!({
-                            "type": "conflict_detected",
-                            "payload": {
-                                "workspaceId": ws_id,
-                                "conflictId": c.id,
-                                "syncId": c.sync_id,
-                                "itemType": c.item_type
-                            }
+                        let conflict_payload = json!({
+                            "workspaceId": ws_id,
+                            "conflictId": c.id,
+                            "syncId": c.sync_id,
+                            "itemType": c.item_type
                         });
-                        state.broadcast_message(&msg.to_string());
+                        let msg = json!({ "type": "conflict_detected", "payload": &conflict_payload });
+                        state.send_to_workspace(&ws_id, &msg.to_string());
+                        state.emit_to_frontend("conflict_detected", &conflict_payload);
                     }
 
                     let workspaces = WorkspaceManager::list_workspaces();
@@ -503,7 +536,11 @@ fn process_client_message(
                         .unwrap_or_else(|| client_id.to_string())
                 };
 
+                let _lock_arc = state.get_workspace_lock(&ws_id);
+                let _lock = _lock_arc.lock();
                 if let Ok((workspace, conflict)) = WorkspaceManager::apply_workspace_item_change(&ws_id, "bookmark_changed", payload, &source) {
+                    state.update_workspace_cache(&workspace);
+                    log_sync_entry(state, "bookmark_changed", &source, Some(&ws_id), 1, true, None);
                     let broadcast = json!({
                         "type": "bookmarks_updated",
                         "payload": {
@@ -514,19 +551,18 @@ fn process_client_message(
                             "source": format!("browser-{}", source)
                         }
                     });
-                    state.broadcast_message(&broadcast.to_string());
+                    state.send_to_workspace(&ws_id, &broadcast.to_string());
 
                     if let Some(c) = conflict {
-                        let msg = json!({
-                            "type": "conflict_detected",
-                            "payload": {
-                                "workspaceId": ws_id,
-                                "conflictId": c.id,
-                                "syncId": c.sync_id,
-                                "itemType": c.item_type
-                            }
+                        let conflict_payload = json!({
+                            "workspaceId": ws_id,
+                            "conflictId": c.id,
+                            "syncId": c.sync_id,
+                            "itemType": c.item_type
                         });
-                        state.broadcast_message(&msg.to_string());
+                        let msg = json!({ "type": "conflict_detected", "payload": &conflict_payload });
+                        state.send_to_workspace(&ws_id, &msg.to_string());
+                        state.emit_to_frontend("conflict_detected", &conflict_payload);
                     }
 
                     let workspaces = WorkspaceManager::list_workspaces();
@@ -692,7 +728,11 @@ fn process_client_message(
                         .unwrap_or_else(|| client_id.to_string())
                 };
 
+                let _lock_arc = state.get_workspace_lock(&ws_id);
+                let _lock = _lock_arc.lock();
                 if let Ok((workspace, conflict)) = WorkspaceManager::apply_workspace_item_change(&ws_id, "folder_created", payload, &source) {
+                    state.update_workspace_cache(&workspace);
+                    log_sync_entry(state, "folder_created", &source, Some(&ws_id), 1, true, None);
                     let broadcast = json!({
                         "type": "bookmarks_updated",
                         "payload": {
@@ -703,19 +743,18 @@ fn process_client_message(
                             "source": format!("browser-{}", source)
                         }
                     });
-                    state.broadcast_message(&broadcast.to_string());
+                    state.send_to_workspace(&ws_id, &broadcast.to_string());
 
                     if let Some(c) = conflict {
-                        let msg = json!({
-                            "type": "conflict_detected",
-                            "payload": {
-                                "workspaceId": ws_id,
-                                "conflictId": c.id,
-                                "syncId": c.sync_id,
-                                "itemType": c.item_type
-                            }
+                        let conflict_payload = json!({
+                            "workspaceId": ws_id,
+                            "conflictId": c.id,
+                            "syncId": c.sync_id,
+                            "itemType": c.item_type
                         });
-                        state.broadcast_message(&msg.to_string());
+                        let msg = json!({ "type": "conflict_detected", "payload": &conflict_payload });
+                        state.send_to_workspace(&ws_id, &msg.to_string());
+                        state.emit_to_frontend("conflict_detected", &conflict_payload);
                     }
                     let workspaces = WorkspaceManager::list_workspaces();
                     state.emit_to_frontend("workspaces_updated", &workspaces);
@@ -738,7 +777,11 @@ fn process_client_message(
                         .unwrap_or_else(|| client_id.to_string())
                 };
 
+                let _lock_arc = state.get_workspace_lock(&ws_id);
+                let _lock = _lock_arc.lock();
                 if let Ok((workspace, conflict)) = WorkspaceManager::apply_workspace_item_change(&ws_id, "folder_removed", payload, &source) {
+                    state.update_workspace_cache(&workspace);
+                    log_sync_entry(state, "folder_removed", &source, Some(&ws_id), 1, true, None);
                     let broadcast = json!({
                         "type": "bookmarks_updated",
                         "payload": {
@@ -749,19 +792,18 @@ fn process_client_message(
                             "source": format!("browser-{}", source)
                         }
                     });
-                    state.broadcast_message(&broadcast.to_string());
+                    state.send_to_workspace(&ws_id, &broadcast.to_string());
 
                     if let Some(c) = conflict {
-                        let msg = json!({
-                            "type": "conflict_detected",
-                            "payload": {
-                                "workspaceId": ws_id,
-                                "conflictId": c.id,
-                                "syncId": c.sync_id,
-                                "itemType": c.item_type
-                            }
+                        let conflict_payload = json!({
+                            "workspaceId": ws_id,
+                            "conflictId": c.id,
+                            "syncId": c.sync_id,
+                            "itemType": c.item_type
                         });
-                        state.broadcast_message(&msg.to_string());
+                        let msg = json!({ "type": "conflict_detected", "payload": &conflict_payload });
+                        state.send_to_workspace(&ws_id, &msg.to_string());
+                        state.emit_to_frontend("conflict_detected", &conflict_payload);
                     }
                     let workspaces = WorkspaceManager::list_workspaces();
                     state.emit_to_frontend("workspaces_updated", &workspaces);
@@ -784,7 +826,11 @@ fn process_client_message(
                         .unwrap_or_else(|| client_id.to_string())
                 };
 
+                let _lock_arc = state.get_workspace_lock(&ws_id);
+                let _lock = _lock_arc.lock();
                 if let Ok((workspace, conflict)) = WorkspaceManager::apply_workspace_item_change(&ws_id, "folder_changed", payload, &source) {
+                    state.update_workspace_cache(&workspace);
+                    log_sync_entry(state, "folder_changed", &source, Some(&ws_id), 1, true, None);
                     let broadcast = json!({
                         "type": "bookmarks_updated",
                         "payload": {
@@ -795,19 +841,18 @@ fn process_client_message(
                             "source": format!("browser-{}", source)
                         }
                     });
-                    state.broadcast_message(&broadcast.to_string());
+                    state.send_to_workspace(&ws_id, &broadcast.to_string());
 
                     if let Some(c) = conflict {
-                        let msg = json!({
-                            "type": "conflict_detected",
-                            "payload": {
-                                "workspaceId": ws_id,
-                                "conflictId": c.id,
-                                "syncId": c.sync_id,
-                                "itemType": c.item_type
-                            }
+                        let conflict_payload = json!({
+                            "workspaceId": ws_id,
+                            "conflictId": c.id,
+                            "syncId": c.sync_id,
+                            "itemType": c.item_type
                         });
-                        state.broadcast_message(&msg.to_string());
+                        let msg = json!({ "type": "conflict_detected", "payload": &conflict_payload });
+                        state.send_to_workspace(&ws_id, &msg.to_string());
+                        state.emit_to_frontend("conflict_detected", &conflict_payload);
                     }
                     let workspaces = WorkspaceManager::list_workspaces();
                     state.emit_to_frontend("workspaces_updated", &workspaces);

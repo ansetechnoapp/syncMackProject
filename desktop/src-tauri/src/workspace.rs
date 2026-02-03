@@ -1,5 +1,6 @@
 use std::fs;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use log::{error, info, warn};
@@ -8,6 +9,12 @@ use serde_json::Value;
 
 use crate::bookmarks::{Bookmark, Folder, BookmarksManager};
 use crate::config::ConfigManager;
+
+static INDEX_LOCK: OnceLock<parking_lot::Mutex<()>> = OnceLock::new();
+
+pub(crate) fn index_lock() -> &'static parking_lot::Mutex<()> {
+    INDEX_LOCK.get_or_init(|| parking_lot::Mutex::new(()))
+}
 
 const MAX_BOOKMARKS_PER_WORKSPACE: usize = 5000;
 
@@ -29,7 +36,7 @@ pub struct Workspace {
     pub version: u64,
     #[serde(default)]
     pub conflicts: Vec<WorkspaceConflict>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub version_log: Vec<WorkspaceVersionEntry>,
 }
 
@@ -121,6 +128,19 @@ impl From<&Workspace> for WorkspaceSummary {
     }
 }
 
+/// Mode d'assignation d'un navigateur à un workspace
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum AssignmentMode {
+    ReadWrite,
+    ReadOnly,
+}
+
+impl Default for AssignmentMode {
+    fn default() -> Self {
+        AssignmentMode::ReadWrite
+    }
+}
+
 /// Association entre un navigateur et un workspace
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -130,6 +150,8 @@ pub struct WorkspaceAssignment {
     #[serde(default)]
     pub workspace_id: Option<String>,
     pub assigned_at: DateTime<Utc>,
+    #[serde(default)]
+    pub mode: AssignmentMode,
 }
 
 /// Index central des workspaces
@@ -216,13 +238,13 @@ impl WorkspaceManager {
                 // Save both workspaces
                 Self::save_workspace(&source_workspace)?;
                 Self::save_workspace(&target_workspace)?;
-                
-                // Update index
-                let mut index = Self::load_index();
-                Self::update_index_summary(&mut index, &source_workspace);
-                Self::update_index_summary(&mut index, &target_workspace);
-                Self::save_index(&index)?;
-                
+
+                Self::with_index(|index| {
+                    Self::update_index_summary(index, &source_workspace);
+                    Self::update_index_summary(index, &target_workspace);
+                    Ok(())
+                })?;
+
                 Ok(result)
             }
             Err(e) => {
@@ -286,7 +308,8 @@ impl WorkspaceManager {
                     if let Some(b) = source.bookmarks.iter().find(|b| b.id == op.item_id) {
                         let mut new_b = b.clone();
                         new_b.parent_id = op.target_parent_id.clone().unwrap_or("1".to_string());
-                        new_b.updated_at_lamport = 1; 
+                        new_b.updated_at_lamport = b.updated_at_lamport.saturating_add(1);
+                        new_b.updated_by = "desktop".to_string();
                         bookmarks_to_move.push(new_b);
                         bookmark_ids_to_remove.push(op.item_id.clone());
                     } else {
@@ -298,7 +321,8 @@ impl WorkspaceManager {
                         // Move the folder itself
                         let mut new_f = f.clone();
                         new_f.parent_id = Some(op.target_parent_id.clone().unwrap_or("1".to_string()));
-                        new_f.updated_at_lamport = 1;
+                        new_f.updated_at_lamport = f.updated_at_lamport.saturating_add(1);
+                        new_f.updated_by = "desktop".to_string();
                         folders_to_move.push(new_f);
                         folder_ids_to_remove.push(op.item_id.clone());
 
@@ -310,7 +334,8 @@ impl WorkspaceManager {
                                 for b in &source.bookmarks {
                                     if b.parent_id == parent_id && !bookmark_ids_to_remove.contains(&b.id) {
                                         let mut new_b = b.clone();
-                                        new_b.updated_at_lamport = 1;
+                                        new_b.updated_at_lamport = b.updated_at_lamport.saturating_add(1);
+                                        new_b.updated_by = "desktop".to_string();
                                         bookmarks_to_move.push(new_b);
                                         bookmark_ids_to_remove.push(b.id.clone());
                                     }
@@ -319,7 +344,8 @@ impl WorkspaceManager {
                                 for sub_f in &source.folders {
                                     if sub_f.parent_id.as_deref() == Some(&parent_id) && !folder_ids_to_remove.contains(&sub_f.id) {
                                         let mut new_sub_f = sub_f.clone();
-                                        new_sub_f.updated_at_lamport = 1;
+                                        new_sub_f.updated_at_lamport = sub_f.updated_at_lamport.saturating_add(1);
+                                        new_sub_f.updated_by = "desktop".to_string();
                                         folders_to_move.push(new_sub_f);
                                         folder_ids_to_remove.push(sub_f.id.clone());
                                         stack.push(sub_f.id.clone());
@@ -404,6 +430,53 @@ impl WorkspaceManager {
         Ok(Self::get_workspaces_dir().join(format!("{}.json", id)))
     }
 
+    /// Retourne le chemin du fichier de version log d'un workspace
+    pub fn get_version_log_path(id: &str) -> Result<std::path::PathBuf, String> {
+        Self::validate_workspace_id(id)?;
+        Ok(Self::get_workspaces_dir().join(format!("{}_log.json", id)))
+    }
+
+    /// Charge le version log d'un workspace depuis son fichier séparé
+    pub fn load_version_log(id: &str) -> Vec<WorkspaceVersionEntry> {
+        match Self::get_version_log_path(id) {
+            Ok(path) => {
+                if !path.exists() {
+                    return vec![];
+                }
+                match fs::read_to_string(&path) {
+                    Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+                    Err(e) => {
+                        warn!("Échec lecture version_log {}: {}", id, e);
+                        vec![]
+                    }
+                }
+            }
+            Err(_) => vec![],
+        }
+    }
+
+    /// Sauvegarde le version log complet d'un workspace
+    fn save_version_log(id: &str, log: &[WorkspaceVersionEntry]) -> Result<(), String> {
+        Self::ensure_workspaces_dir();
+        let path = Self::get_version_log_path(id)?;
+        let content = serde_json::to_string_pretty(log)
+            .map_err(|e| format!("Échec sérialisation version_log: {}", e))?;
+        fs::write(&path, content)
+            .map_err(|e| format!("Échec écriture version_log: {}", e))?;
+        Ok(())
+    }
+
+    /// Ajoute une entrée au version log (avec troncature à 2000 entrées)
+    fn append_version_log_entry(workspace_id: &str, entry: WorkspaceVersionEntry) -> Result<(), String> {
+        let mut log = Self::load_version_log(workspace_id);
+        log.push(entry);
+        if log.len() > 2000 {
+            let excess = log.len() - 2000;
+            log.drain(0..excess);
+        }
+        Self::save_version_log(workspace_id, &log)
+    }
+
     /// S'assure que le dossier des workspaces existe
     pub fn ensure_workspaces_dir() {
         let path = Self::get_workspaces_dir();
@@ -423,6 +496,24 @@ impl WorkspaceManager {
     }
 
     // ==================== Index ====================
+
+    /// Exécute une opération atomique sur l'index (load → modify → save) sous lock global
+    fn with_index<F, R>(f: F) -> Result<R, String>
+    where F: FnOnce(&mut WorkspacesIndex) -> Result<R, String> {
+        let _guard = index_lock().lock();
+        let mut index = Self::load_index();
+        let result = f(&mut index)?;
+        Self::save_index(&index)?;
+        Ok(result)
+    }
+
+    /// Lecture seule de l'index sous lock global (snapshot cohérent)
+    fn read_index<F, R>(f: F) -> R
+    where F: FnOnce(&WorkspacesIndex) -> R {
+        let _guard = index_lock().lock();
+        let index = Self::load_index();
+        f(&index)
+    }
 
     /// Charge l'index des workspaces
     pub fn load_index() -> WorkspacesIndex {
@@ -501,10 +592,10 @@ impl WorkspaceManager {
 
         Self::save_workspace(&workspace)?;
 
-        // Mettre à jour l'index
-        let mut index = Self::load_index();
-        Self::update_index_summary(&mut index, &workspace);
-        Self::save_index(&index)?;
+        Self::with_index(|index| {
+            Self::update_index_summary(index, &workspace);
+            Ok(())
+        })?;
 
         info!("Workspace créé: {} ({})", workspace.name, workspace.id);
         Ok(workspace)
@@ -521,8 +612,24 @@ impl WorkspaceManager {
         let content = fs::read_to_string(&path)
             .map_err(|e| format!("Échec lecture workspace: {}", e))?;
 
-        serde_json::from_str::<Workspace>(&content)
-            .map_err(|e| format!("Échec parsing workspace: {}", e))
+        let mut workspace: Workspace = serde_json::from_str(&content)
+            .map_err(|e| format!("Échec parsing workspace: {}", e))?;
+
+        // Migration : si version_log non vide (ancien format), sauver dans fichier séparé
+        if !workspace.version_log.is_empty() {
+            info!("Migration version_log pour workspace {}: {} entrées", id, workspace.version_log.len());
+            let mut existing_log = Self::load_version_log(id);
+            existing_log.extend(workspace.version_log.drain(..));
+            if existing_log.len() > 2000 {
+                let excess = existing_log.len() - 2000;
+                existing_log.drain(0..excess);
+            }
+            let _ = Self::save_version_log(id, &existing_log);
+            // Re-sauver le workspace sans le version_log (skip_serializing)
+            let _ = Self::save_workspace(&workspace);
+        }
+
+        Ok(workspace)
     }
 
     /// Sauvegarde un workspace
@@ -573,10 +680,10 @@ impl WorkspaceManager {
 
         Self::save_workspace(&workspace)?;
 
-        // Mettre à jour l'index
-        let mut index = Self::load_index();
-        Self::update_index_summary(&mut index, &workspace);
-        Self::save_index(&index)?;
+        Self::with_index(|index| {
+            Self::update_index_summary(index, &workspace);
+            Ok(())
+        })?;
 
         Ok(workspace)
     }
@@ -594,19 +701,20 @@ impl WorkspaceManager {
         let bak_path = path.with_extension("bak");
         let _ = fs::remove_file(&bak_path);
 
-        // Mettre à jour l'index
-        let mut index = Self::load_index();
-        index.workspaces.retain(|w| w.id != id);
-
-        // Supprimer les assignments liés
-        index.assignments.retain(|a| a.workspace_id.as_deref() != Some(id));
-
-        // Si c'était le workspace par défaut, le retirer
-        if index.default_workspace_id.as_deref() == Some(id) {
-            index.default_workspace_id = None;
+        // Supprimer le fichier de version log
+        if let Ok(log_path) = Self::get_version_log_path(id) {
+            let _ = fs::remove_file(&log_path);
         }
 
-        Self::save_index(&index)?;
+        let id_owned = id.to_string();
+        Self::with_index(|index| {
+            index.workspaces.retain(|w| w.id != id_owned);
+            index.assignments.retain(|a| a.workspace_id.as_deref() != Some(id_owned.as_str()));
+            if index.default_workspace_id.as_deref() == Some(id_owned.as_str()) {
+                index.default_workspace_id = None;
+            }
+            Ok(())
+        })?;
 
         info!("Workspace supprimé: {}", id);
         Ok(())
@@ -632,10 +740,10 @@ impl WorkspaceManager {
 
         Self::save_workspace(&new_workspace)?;
 
-        // Mettre à jour l'index
-        let mut index = Self::load_index();
-        Self::update_index_summary(&mut index, &new_workspace);
-        Self::save_index(&index)?;
+        Self::with_index(|index| {
+            Self::update_index_summary(index, &new_workspace);
+            Ok(())
+        })?;
 
         info!("Workspace dupliqué: {} -> {}", id, new_workspace.id);
         Ok(new_workspace)
@@ -643,74 +751,89 @@ impl WorkspaceManager {
 
     /// Liste tous les workspaces (résumés)
     pub fn list_workspaces() -> Vec<WorkspaceSummary> {
-        let index = Self::load_index();
-        index.workspaces
+        Self::read_index(|index| index.workspaces.clone())
     }
 
     // ==================== Assignments ====================
 
     /// Assigne un workspace à un navigateur
     pub fn assign_workspace(browser_id: &str, browser_name: &str, workspace_id: &str) -> Result<(), String> {
+        Self::assign_workspace_with_mode(browser_id, browser_name, workspace_id, "ReadWrite")
+    }
+
+    /// Assigne un workspace à un navigateur avec un mode (ReadWrite ou ReadOnly)
+    pub fn assign_workspace_with_mode(browser_id: &str, browser_name: &str, workspace_id: &str, mode: &str) -> Result<(), String> {
         // Vérifier que le workspace existe
         let _ = Self::load_workspace(workspace_id)?;
 
-        let mut index = Self::load_index();
+        let assignment_mode = match mode {
+            "ReadOnly" => AssignmentMode::ReadOnly,
+            _ => AssignmentMode::ReadWrite,
+        };
 
-        // Chercher si ce navigateur a déjà une assignment
-        if let Some(pos) = index.assignments.iter().position(|a| a.browser_id == browser_id) {
-            index.assignments[pos].workspace_id = Some(workspace_id.to_string());
-            index.assignments[pos].assigned_at = Utc::now();
-        } else {
-            index.assignments.push(WorkspaceAssignment {
-                browser_id: browser_id.to_string(),
-                browser_name: browser_name.to_string(),
-                workspace_id: Some(workspace_id.to_string()),
-                assigned_at: Utc::now(),
-            });
-        }
-
-        Self::save_index(&index)?;
-        info!("Workspace {} assigné à {}", workspace_id, browser_name);
+        let bid = browser_id.to_string();
+        let bname = browser_name.to_string();
+        let wsid = workspace_id.to_string();
+        Self::with_index(|index| {
+            if let Some(pos) = index.assignments.iter().position(|a| a.browser_id == bid) {
+                index.assignments[pos].workspace_id = Some(wsid.clone());
+                index.assignments[pos].assigned_at = Utc::now();
+                index.assignments[pos].mode = assignment_mode.clone();
+            } else {
+                index.assignments.push(WorkspaceAssignment {
+                    browser_id: bid.clone(),
+                    browser_name: bname.clone(),
+                    workspace_id: Some(wsid.clone()),
+                    assigned_at: Utc::now(),
+                    mode: assignment_mode.clone(),
+                });
+            }
+            Ok(())
+        })?;
+        info!("Workspace {} assigné à {} (mode: {})", workspace_id, browser_name, mode);
         Ok(())
     }
 
     /// Retire l'assignment d'un navigateur
     pub fn unassign_workspace(browser_id: &str) -> Result<(), String> {
-        let mut index = Self::load_index();
-
-        if let Some(pos) = index.assignments.iter().position(|a| a.browser_id == browser_id) {
-            index.assignments[pos].workspace_id = None;
-            index.assignments[pos].assigned_at = Utc::now();
-            Self::save_index(&index)?;
-            info!("Workspace désassigné pour navigateur {}", browser_id);
-        }
-
+        let bid = browser_id.to_string();
+        Self::with_index(|index| {
+            if let Some(pos) = index.assignments.iter().position(|a| a.browser_id == bid) {
+                index.assignments[pos].workspace_id = None;
+                index.assignments[pos].assigned_at = Utc::now();
+            }
+            Ok(())
+        })?;
+        info!("Workspace désassigné pour navigateur {}", browser_id);
         Ok(())
     }
 
     /// Obtient le workspace assigné à un navigateur
     pub fn get_workspace_for_browser(browser_id: &str) -> Option<String> {
-        let index = Self::load_index();
-        index.assignments
-            .iter()
-            .find(|a| a.browser_id == browser_id)
-            .and_then(|a| a.workspace_id.clone())
+        let bid = browser_id.to_string();
+        Self::read_index(|index| {
+            index.assignments
+                .iter()
+                .find(|a| a.browser_id == bid)
+                .and_then(|a| a.workspace_id.clone())
+        })
     }
 
     /// Obtient tous les navigateurs assignés à un workspace
     pub fn get_browsers_for_workspace(workspace_id: &str) -> Vec<String> {
-        let index = Self::load_index();
-        index.assignments
-            .iter()
-            .filter(|a| a.workspace_id.as_deref() == Some(workspace_id))
-            .map(|a| a.browser_id.clone())
-            .collect()
+        let wsid = workspace_id.to_string();
+        Self::read_index(|index| {
+            index.assignments
+                .iter()
+                .filter(|a| a.workspace_id.as_deref() == Some(wsid.as_str()))
+                .map(|a| a.browser_id.clone())
+                .collect()
+        })
     }
 
     /// Obtient toutes les assignments
     pub fn get_assignments() -> Vec<WorkspaceAssignment> {
-        let index = Self::load_index();
-        index.assignments
+        Self::read_index(|index| index.assignments.clone())
     }
 
     // ==================== Migration ====================
@@ -754,10 +877,11 @@ impl WorkspaceManager {
         Self::save_workspace(&workspace)?;
 
         // Créer l'index avec ce workspace comme défaut
-        let mut index = WorkspacesIndex::default();
-        Self::update_index_summary(&mut index, &workspace);
-        index.default_workspace_id = Some(workspace.id.clone());
-        Self::save_index(&index)?;
+        Self::with_index(|index| {
+            Self::update_index_summary(index, &workspace);
+            index.default_workspace_id = Some(workspace.id.clone());
+            Ok(())
+        })?;
 
         // Renommer l'ancien fichier
         let backup_path = legacy_path.with_extension("legacy.bak");
@@ -798,10 +922,10 @@ impl WorkspaceManager {
 
         Self::save_workspace(&workspace)?;
 
-        // Mettre à jour l'index
-        let mut index = Self::load_index();
-        Self::update_index_summary(&mut index, &workspace);
-        Self::save_index(&index)?;
+        Self::with_index(|index| {
+            Self::update_index_summary(index, &workspace);
+            Ok(())
+        })?;
 
         // Assigner ce workspace au navigateur
         Self::assign_workspace(browser_id, browser_name, &workspace.id)?;
@@ -844,10 +968,10 @@ impl WorkspaceManager {
             workspace.version += 1;
             Self::save_workspace(&workspace)?;
 
-            // Mettre à jour l'index
-            let mut index = Self::load_index();
-            Self::update_index_summary(&mut index, &workspace);
-            Self::save_index(&index)?;
+            Self::with_index(|index| {
+                Self::update_index_summary(index, &workspace);
+                Ok(())
+            })?;
         }
 
         Ok(())
@@ -864,10 +988,10 @@ impl WorkspaceManager {
             workspace.version += 1;
             Self::save_workspace(&workspace)?;
 
-            // Mettre à jour l'index
-            let mut index = Self::load_index();
-            Self::update_index_summary(&mut index, &workspace);
-            Self::save_index(&index)?;
+            Self::with_index(|index| {
+                Self::update_index_summary(index, &workspace);
+                Ok(())
+            })?;
         }
 
         Ok(())
@@ -898,10 +1022,10 @@ impl WorkspaceManager {
             workspace.version += 1;
             Self::save_workspace(&workspace)?;
 
-            // Mettre à jour l'index
-            let mut index = Self::load_index();
-            Self::update_index_summary(&mut index, &workspace);
-            Self::save_index(&index)?;
+            Self::with_index(|index| {
+                Self::update_index_summary(index, &workspace);
+                Ok(())
+            })?;
         }
 
         Ok(())
@@ -919,51 +1043,152 @@ impl WorkspaceManager {
 
         let mut workspace = Self::load_workspace(workspace_id)?;
 
-        let mut local_bookmarks_by_sync: HashMap<String, &Bookmark> = HashMap::new();
-        for b in &workspace.bookmarks {
-            if !b.sync_id.is_empty() {
-                local_bookmarks_by_sync.insert(b.sync_id.clone(), b);
-            }
-        }
-        let mut local_folders_by_sync: HashMap<String, &Folder> = HashMap::new();
-        for f in &workspace.folders {
-            if !f.sync_id.is_empty() {
-                local_folders_by_sync.insert(f.sync_id.clone(), f);
-            }
+        // Merge non-destructif des bookmarks
+        workspace.bookmarks = Self::merge_bookmarks(&workspace.bookmarks, &bookmarks);
+        // Merge non-destructif des folders
+        workspace.folders = Self::merge_folders(&workspace.folders, &folders);
+
+        // Limite de taille
+        if workspace.bookmarks.len() > MAX_BOOKMARKS_PER_WORKSPACE {
+            workspace.bookmarks.truncate(MAX_BOOKMARKS_PER_WORKSPACE);
         }
 
-        let mut incoming_bookmarks = bookmarks;
-        for b in &mut incoming_bookmarks {
-            if let Some(local) = local_bookmarks_by_sync.get(&b.sync_id) {
-                b.updated_at_lamport = local.updated_at_lamport;
-                b.updated_by = local.updated_by.clone();
-            }
-        }
-
-        let mut incoming_folders = folders;
-        for f in &mut incoming_folders {
-            if let Some(local) = local_folders_by_sync.get(&f.sync_id) {
-                f.updated_at_lamport = local.updated_at_lamport;
-                f.updated_by = local.updated_by.clone();
-            }
-        }
-
-        workspace.bookmarks = incoming_bookmarks;
-        workspace.folders = incoming_folders;
         workspace.version += 1;
         workspace.updated_at = Utc::now();
 
         Self::save_workspace(&workspace)?;
 
-        // Mettre à jour l'index
-        let mut index = Self::load_index();
-        Self::update_index_summary(&mut index, &workspace);
-        Self::save_index(&index)?;
+        Self::with_index(|index| {
+            Self::update_index_summary(index, &workspace);
+            Ok(())
+        })?;
 
         info!("Workspace {} synchronisé: {} favoris, {} dossiers",
               workspace_id, workspace.bookmarks.len(), workspace.folders.len());
 
         Ok(workspace)
+    }
+
+    /// Merge non-destructif de bookmarks : conserve les ajouts locaux, résout par Lamport
+    fn merge_bookmarks(local: &[Bookmark], incoming: &[Bookmark]) -> Vec<Bookmark> {
+        let mut incoming_by_sync: HashMap<String, &Bookmark> = HashMap::new();
+        for b in incoming {
+            if !b.sync_id.is_empty() {
+                incoming_by_sync.insert(b.sync_id.clone(), b);
+            }
+        }
+
+        let mut result: Vec<Bookmark> = Vec::new();
+        let mut seen_sync_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        // 1. Parcourir les bookmarks locaux
+        for local_b in local {
+            if local_b.sync_id.is_empty() {
+                result.push(local_b.clone());
+                continue;
+            }
+
+            if let Some(inc_b) = incoming_by_sync.remove(&local_b.sync_id) {
+                // Présent dans les deux : garder celui avec le Lamport le plus haut
+                if inc_b.deleted || local_b.deleted {
+                    // Si supprimé dans l'un, marquer deleted
+                    let mut merged = if local_b.updated_at_lamport >= inc_b.updated_at_lamport {
+                        local_b.clone()
+                    } else {
+                        inc_b.clone()
+                    };
+                    merged.deleted = true;
+                    result.push(merged);
+                } else if inc_b.updated_at_lamport > local_b.updated_at_lamport {
+                    result.push(inc_b.clone());
+                } else {
+                    result.push(local_b.clone());
+                }
+                seen_sync_ids.insert(local_b.sync_id.clone());
+            } else {
+                // Seulement en local → garder (ajouté depuis le desktop)
+                result.push(local_b.clone());
+                seen_sync_ids.insert(local_b.sync_id.clone());
+            }
+        }
+
+        // 2. Ajouter les bookmarks incoming non vus (nouveaux depuis le navigateur)
+        for inc_b in incoming {
+            if inc_b.sync_id.is_empty() {
+                result.push(inc_b.clone());
+                continue;
+            }
+            if !seen_sync_ids.contains(&inc_b.sync_id) {
+                // Déduplication par (url, parent_id) pour les bookmarks sans correspondance sync_id
+                let dup = result.iter().position(|r| {
+                    !r.sync_id.is_empty() && r.url == inc_b.url && r.parent_id == inc_b.parent_id && !r.deleted
+                });
+                if let Some(pos) = dup {
+                    // Garder celui avec le Lamport le plus haut
+                    if inc_b.updated_at_lamport > result[pos].updated_at_lamport {
+                        result[pos] = inc_b.clone();
+                    }
+                } else {
+                    result.push(inc_b.clone());
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Merge non-destructif de folders : conserve les ajouts locaux, résout par Lamport
+    fn merge_folders(local: &[Folder], incoming: &[Folder]) -> Vec<Folder> {
+        let mut incoming_by_sync: HashMap<String, &Folder> = HashMap::new();
+        for f in incoming {
+            if !f.sync_id.is_empty() {
+                incoming_by_sync.insert(f.sync_id.clone(), f);
+            }
+        }
+
+        let mut result: Vec<Folder> = Vec::new();
+        let mut seen_sync_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        // 1. Parcourir les folders locaux
+        for local_f in local {
+            if local_f.sync_id.is_empty() {
+                result.push(local_f.clone());
+                continue;
+            }
+
+            if let Some(inc_f) = incoming_by_sync.remove(&local_f.sync_id) {
+                if inc_f.deleted || local_f.deleted {
+                    let mut merged = if local_f.updated_at_lamport >= inc_f.updated_at_lamport {
+                        local_f.clone()
+                    } else {
+                        inc_f.clone()
+                    };
+                    merged.deleted = true;
+                    result.push(merged);
+                } else if inc_f.updated_at_lamport > local_f.updated_at_lamport {
+                    result.push(inc_f.clone());
+                } else {
+                    result.push(local_f.clone());
+                }
+                seen_sync_ids.insert(local_f.sync_id.clone());
+            } else {
+                result.push(local_f.clone());
+                seen_sync_ids.insert(local_f.sync_id.clone());
+            }
+        }
+
+        // 2. Ajouter les folders incoming non vus
+        for inc_f in incoming {
+            if inc_f.sync_id.is_empty() {
+                result.push(inc_f.clone());
+                continue;
+            }
+            if !seen_sync_ids.contains(&inc_f.sync_id) {
+                result.push(inc_f.clone());
+            }
+        }
+
+        result
     }
 
     pub fn list_conflicts(workspace_id: &str) -> Result<Vec<WorkspaceConflict>, String> {
@@ -1028,9 +1253,10 @@ impl WorkspaceManager {
 
         Self::save_workspace(&workspace)?;
 
-        let mut index = Self::load_index();
-        Self::update_index_summary(&mut index, &workspace);
-        Self::save_index(&index)?;
+        Self::with_index(|index| {
+            Self::update_index_summary(index, &workspace);
+            Ok(())
+        })?;
 
         Ok(workspace)
     }
@@ -1104,7 +1330,7 @@ impl WorkspaceManager {
                         created_at: Utc::now(),
                         snapshot: serde_json::to_value(updated.clone()).unwrap_or(Value::Null),
                     };
-                    workspace.version_log.push(entry);
+                    Self::append_version_log_entry(&workspace.id, entry)?;
 
                     if let Some(slot) = workspace.bookmarks.iter_mut().find(|b| b.sync_id == sync_id) {
                         *slot = updated;
@@ -1130,7 +1356,7 @@ impl WorkspaceManager {
                         created_at: Utc::now(),
                         snapshot: serde_json::to_value(created).unwrap_or(Value::Null),
                     };
-                    workspace.version_log.push(entry);
+                    Self::append_version_log_entry(&workspace.id, entry)?;
                 }
             }
             "bookmark_removed" => {
@@ -1148,7 +1374,7 @@ impl WorkspaceManager {
                         created_at: Utc::now(),
                         snapshot: serde_json::to_value(existing.clone()).unwrap_or(Value::Null),
                     };
-                    workspace.version_log.push(entry);
+                    Self::append_version_log_entry(&workspace.id, entry)?;
                 }
             }
             "folder_created" | "folder_changed" => {
@@ -1199,7 +1425,7 @@ impl WorkspaceManager {
                         created_at: Utc::now(),
                         snapshot: serde_json::to_value(updated.clone()).unwrap_or(Value::Null),
                     };
-                    workspace.version_log.push(entry);
+                    Self::append_version_log_entry(&workspace.id, entry)?;
 
                     if let Some(slot) = workspace.folders.iter_mut().find(|f| f.sync_id == sync_id) {
                         *slot = updated;
@@ -1225,7 +1451,7 @@ impl WorkspaceManager {
                         created_at: Utc::now(),
                         snapshot: serde_json::to_value(created).unwrap_or(Value::Null),
                     };
-                    workspace.version_log.push(entry);
+                    Self::append_version_log_entry(&workspace.id, entry)?;
                 }
             }
             "folder_removed" => {
@@ -1243,24 +1469,20 @@ impl WorkspaceManager {
                         created_at: Utc::now(),
                         snapshot: serde_json::to_value(existing.clone()).unwrap_or(Value::Null),
                     };
-                    workspace.version_log.push(entry);
+                    Self::append_version_log_entry(&workspace.id, entry)?;
                 }
             }
             _ => return Err("Unsupported item_type".to_string()),
-        }
-
-        if workspace.version_log.len() > 2000 {
-            let excess = workspace.version_log.len() - 2000;
-            workspace.version_log.drain(0..excess);
         }
 
         workspace.version += 1;
         workspace.updated_at = Utc::now();
 
         Self::save_workspace(&workspace)?;
-        let mut index = Self::load_index();
-        Self::update_index_summary(&mut index, &workspace);
-        Self::save_index(&index)?;
+        Self::with_index(|index| {
+            Self::update_index_summary(index, &workspace);
+            Ok(())
+        })?;
 
         Ok((workspace, conflict_created))
     }
@@ -1301,12 +1523,13 @@ impl WorkspaceManager {
                 ws.version_log = vec![];
                 Self::save_workspace(&ws)?;
 
-                let mut index = Self::load_index();
-                Self::update_index_summary(&mut index, &ws);
-                if index.default_workspace_id.is_none() {
-                    index.default_workspace_id = Some(ws.id.clone());
-                }
-                Self::save_index(&index)?;
+                Self::with_index(|index| {
+                    Self::update_index_summary(index, &ws);
+                    if index.default_workspace_id.is_none() {
+                        index.default_workspace_id = Some(ws.id.clone());
+                    }
+                    Ok(())
+                })?;
                 Ok(ws)
             }
             _ => Err("Unsupported import mode".to_string()),
@@ -1317,11 +1540,19 @@ impl WorkspaceManager {
         let dir = Self::get_backups_dir();
         Self::ensure_dir(&dir);
 
-        let index = Self::load_index();
-        let mut workspaces: Vec<Workspace> = Vec::new();
+        let index = Self::read_index(|i| i.clone());
+        let mut workspaces_json: Vec<Value> = Vec::new();
         for ws in &index.workspaces {
             if let Ok(full) = Self::load_workspace(&ws.id) {
-                workspaces.push(full);
+                // Sérialiser le workspace (sans version_log dû à skip_serializing)
+                if let Ok(mut ws_val) = serde_json::to_value(&full) {
+                    // Charger et injecter le version_log séparé pour le backup
+                    let version_log = Self::load_version_log(&ws.id);
+                    if let Ok(log_val) = serde_json::to_value(&version_log) {
+                        ws_val.as_object_mut().map(|obj| obj.insert("versionLog".to_string(), log_val));
+                    }
+                    workspaces_json.push(ws_val);
+                }
             }
         }
 
@@ -1329,7 +1560,7 @@ impl WorkspaceManager {
             "formatVersion": "1.0",
             "createdAt": Utc::now(),
             "index": index,
-            "workspaces": workspaces,
+            "workspaces": workspaces_json,
         });
 
         let ts = Utc::now().format("%Y%m%d-%H%M%S").to_string();
@@ -1361,7 +1592,10 @@ impl WorkspaceManager {
             }
         }
 
-        Self::save_index(&restored_index)?;
+        {
+            let _guard = index_lock().lock();
+            Self::save_index(&restored_index)?;
+        }
         Ok((pre_backup, restored_index))
     }
 }

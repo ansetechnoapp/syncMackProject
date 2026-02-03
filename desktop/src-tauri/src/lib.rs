@@ -2,7 +2,9 @@ pub mod bookmarks;
 pub mod commands;
 pub mod config;
 pub mod file_watcher;
+pub mod smart_folders;
 pub mod state;
+pub mod sync_log;
 pub mod websocket;
 pub mod workspace;
 
@@ -32,6 +34,7 @@ pub fn run() {
     // Build Tauri application
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(app_state.clone())
         .invoke_handler(tauri::generate_handler![
             get_config,
@@ -72,6 +75,23 @@ pub fn run() {
             remove_bookmark_from_workspace,
             update_bookmark_in_workspace,
             batch_move_items,
+            // Recherche Globale
+            search_bookmarks_global,
+            // Historique de Sync
+            get_sync_history,
+            clear_sync_history,
+            // Smart Folders
+            get_smart_folder_recent,
+            get_smart_folder_by_domain,
+            get_smart_folder_duplicates,
+            apply_custom_smart_filter,
+            save_custom_filter,
+            delete_custom_filter,
+            list_custom_filters,
+            // Multi-navigateur
+            assign_workspace_to_browser_with_mode,
+            // Auto-update
+            check_for_updates,
         ])
         .setup(move |app| {
             // Store AppHandle for event emission

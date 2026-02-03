@@ -3,6 +3,7 @@ import {
   DndContext,
   DragOverlay,
   DragEndEvent,
+  DragStartEvent,
   useSensor,
   useSensors,
   PointerSensor,
@@ -20,6 +21,7 @@ import {
   getConnectedClients,
   removeBookmarkFromWorkspace,
   addBookmarkToWorkspace,
+  updateBookmarkInWorkspace,
   batchMoveItems,
   BatchMoveOperation,
   ItemType,
@@ -34,6 +36,17 @@ import { listen } from '@tauri-apps/api/event';
 import { useSyncStatusUpdated } from "../hooks/useRealtimeEvents";
 import WorkspaceColumn from './WorkspaceColumn';
 import { BookmarkItemContent } from './BookmarkItem'; // For DragOverlay
+import { useToast } from './Toast';
+import { useActionHistory } from '../hooks/useActionHistory';
+
+interface DragItemData {
+  id: string;
+  title: string;
+  url?: string;
+  parentId?: string;
+  isFolder?: boolean;
+  sourceWorkspaceId?: string;
+}
 
 export default function WorkspacesPanel() {
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
@@ -55,7 +68,13 @@ export default function WorkspacesPanel() {
   const [newItemUrl, setNewItemUrl] = useState("");
 
   // DnD State
-  const [activeDragItem, setActiveDragItem] = useState<any>(null);
+  const [activeDragItem, setActiveDragItem] = useState<DragItemData | null>(null);
+
+  // Edit Bookmark Modal
+  const [editingBookmark, setEditingBookmark] = useState<{ wsId: string; bookmarkId: string; title: string; url: string } | null>(null);
+
+  const { addToast } = useToast();
+  const { recordAction, undo, redo, canUndo, canRedo } = useActionHistory();
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -110,11 +129,15 @@ export default function WorkspacesPanel() {
     const unlistenWorkspaces = listen('workspaces_updated', loadData);
     const unlistenAssignments = listen('assignments_updated', loadData);
     const unlistenClients = listen('clients_updated', loadData);
+    const unlistenConflict = listen<{ workspaceId: string; conflictId: string; syncId: string; itemType: string }>('conflict_detected', (event) => {
+      addToast(`Conflit détecté dans le workspace (${event.payload.itemType})`, 'warning', { duration: 8000 });
+    });
 
     return () => {
       unlistenWorkspaces.then(f => f());
       unlistenAssignments.then(f => f());
       unlistenClients.then(f => f());
+      unlistenConflict.then(f => f());
     };
   }, []);
 
@@ -156,8 +179,8 @@ export default function WorkspacesPanel() {
     }
   };
 
-  const handleDragStart = (event: any) => {
-      setActiveDragItem(event.active.data.current);
+  const handleDragStart = (event: DragStartEvent) => {
+      setActiveDragItem(event.active.data.current as DragItemData);
   };
 
   const handleDragEnd = async (event: DragEndEvent) => {
@@ -218,14 +241,39 @@ export default function WorkspacesPanel() {
   };
 
   const handleEditBookmark = (wsId: string, bId: string) => {
-      // Implement edit modal logic if needed, or pass down to column
-      console.log("Edit", wsId, bId);
+      setEditingBookmark({ wsId, bookmarkId: bId, title: '', url: '' });
+  };
+
+  const submitEditBookmark = async () => {
+      if (!editingBookmark) return;
+      try {
+          await updateBookmarkInWorkspace(editingBookmark.wsId, editingBookmark.bookmarkId, {
+              title: editingBookmark.title || undefined,
+              url: editingBookmark.url || undefined,
+          });
+          setEditingBookmark(null);
+      } catch (e) {
+          console.error(e);
+          setError(`Erreur modification: ${e}`);
+      }
   };
 
   const handleDeleteBookmark = async (wsId: string, bId: string) => {
       if(!confirm("Supprimer ce favori ?")) return;
       try {
           await removeBookmarkFromWorkspace(wsId, bId);
+          recordAction({
+            type: 'delete_bookmark',
+            workspaceId: wsId,
+            description: `Suppression du favori ${bId}`,
+            undoFn: async () => {
+              // Cannot fully undo without snapshot; best-effort
+              addToast('Annulation non disponible pour cette action', 'warning');
+            },
+            redoFn: async () => {
+              await removeBookmarkFromWorkspace(wsId, bId);
+            },
+          });
       } catch(e) {
           console.error(e);
       }
@@ -245,14 +293,28 @@ export default function WorkspacesPanel() {
 
   const submitAddBookmark = async () => {
       if (!creatingBookmarkInWs || !newItemTitle || !newItemUrl) return;
+      const wsId = creatingBookmarkInWs;
+      const title = newItemTitle;
+      const url = newItemUrl;
       try {
-          await addBookmarkToWorkspace(creatingBookmarkInWs, {
-              title: newItemTitle,
-              url: newItemUrl,
-              parentId: "1", // Root
+          await addBookmarkToWorkspace(wsId, {
+              title,
+              url,
+              parentId: "1",
               isFolder: false
           });
           setCreatingBookmarkInWs(null);
+          recordAction({
+            type: 'add_bookmark',
+            workspaceId: wsId,
+            description: `Ajout du favori "${title}"`,
+            undoFn: async () => {
+              addToast('Annulation non disponible pour cette action', 'warning');
+            },
+            redoFn: async () => {
+              await addBookmarkToWorkspace(wsId, { title, url, parentId: "1", isFolder: false });
+            },
+          });
       } catch (e) {
           console.error(e);
           setError(`Erreur ajout favori: ${e}`);
@@ -288,7 +350,13 @@ export default function WorkspacesPanel() {
 
             <div className="board-header">
                 <h2>Workspaces</h2>
-                <div style={{ display: 'flex', gap: '10px' }}>
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                  <button className="btn-xs btn-outline" onClick={undo} disabled={!canUndo} title="Annuler (Ctrl+Z)">
+                    ↩
+                  </button>
+                  <button className="btn-xs btn-outline" onClick={redo} disabled={!canRedo} title="Rétablir (Ctrl+Y)">
+                    ↪
+                  </button>
                   <button
                     className="btn btn-primary"
                     onClick={handleRequestSync}
@@ -304,44 +372,11 @@ export default function WorkspacesPanel() {
             </div>
 
             <div className="browsers-bar">
-                <div className="browsers-list-horizontal">
-                    {clients.length === 0 ? (
-                        <div className="empty-state-small">Aucun navigateur connecté</div>
-                    ) : (
-                        clients.map(client => {
-                            const browserId = client.browser_instance_id;
-                            const assignment = assignments.find(a => a.browser_id === browserId);
-                            
-                            return (
-                                <div key={client.id} className="client-item-horizontal">
-                                    <span className="client-icon">{getBrowserIcon(client.browser)}</span>
-                                    <div className="client-info">
-                                        <span className="client-browser">
-                                          {(!client.browser || client.browser === "Unknown" || client.browser === "Unknown Browser")
-                                            ? "Navigateur Inconnu"
-                                            : client.browser}
-                                        </span>
-                                        <div style={{ marginTop: '2px' }}>
-                                            <select 
-                                                value={assignment?.workspace_id || ""} 
-                                                onChange={(e) => {
-                                                    if (e.target.value) assignWorkspaceToBrowser(browserId!, e.target.value);
-                                                    else unassignWorkspaceFromBrowser(browserId!);
-                                                }}
-                                                className="browser-select-compact"
-                                            >
-                                                <option value="">-- Non assigné --</option>
-                                                {workspaces.map(ws => (
-                                                    <option key={ws.id} value={ws.id}>{ws.name}</option>
-                                                ))}
-                                            </select>
-                                        </div>
-                                    </div>
-                                </div>
-                            );
-                        })
-                    )}
-                </div>
+                <span className="browsers-info">
+                    {clients.length === 0
+                        ? "Aucun navigateur connecté"
+                        : `${clients.length} navigateur(s) connecté(s)`}
+                </span>
             </div>
 
             <div className="board-content">
@@ -349,10 +384,14 @@ export default function WorkspacesPanel() {
                     {workspaces.map(ws => (
                         <div key={ws.id} style={{ position: 'relative' }}>
                              {/* Workspace Actions Overlay or Header Buttons could go here */}
-                             <WorkspaceColumn 
+                             <WorkspaceColumn
                                 workspaceId={ws.id}
                                 title={ws.name}
                                 color={ws.color || '#3498db'}
+                                clients={clients}
+                                assignments={assignments}
+                                onAssignBrowser={(browserId) => assignWorkspaceToBrowser(browserId, ws.id)}
+                                onUnassignBrowser={(browserId) => unassignWorkspaceFromBrowser(browserId)}
                                 onEditBookmark={handleEditBookmark}
                                 onDeleteBookmark={handleDeleteBookmark}
                                 onAddBookmark={handleOpenAddBookmark}
@@ -464,6 +503,38 @@ export default function WorkspacesPanel() {
                 </div>
             )}
             
+            {/* Edit Bookmark Modal */}
+            {editingBookmark && (
+                <div className="modal-overlay" onClick={() => setEditingBookmark(null)}>
+                    <div className="modal" onClick={e => e.stopPropagation()}>
+                        <h3>Modifier le favori</h3>
+                        <div className="form-group">
+                            <label>Titre</label>
+                            <input
+                                type="text"
+                                value={editingBookmark.title}
+                                onChange={e => setEditingBookmark({ ...editingBookmark, title: e.target.value })}
+                                placeholder="Nouveau titre"
+                                autoFocus
+                            />
+                        </div>
+                        <div className="form-group">
+                            <label>URL</label>
+                            <input
+                                type="text"
+                                value={editingBookmark.url}
+                                onChange={e => setEditingBookmark({ ...editingBookmark, url: e.target.value })}
+                                placeholder="Nouvelle URL"
+                            />
+                        </div>
+                        <div className="modal-actions">
+                            <button className="btn-secondary" onClick={() => setEditingBookmark(null)}>Annuler</button>
+                            <button className="btn-primary" onClick={submitEditBookmark} disabled={!editingBookmark.title.trim() && !editingBookmark.url.trim()}>Enregistrer</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <DragOverlay>
                 {activeDragItem ? (
                      <BookmarkItemContent
@@ -479,13 +550,3 @@ export default function WorkspacesPanel() {
   );
 }
 
-function getBrowserIcon(browser: string): string {
-  const name = browser.toLowerCase();
-  if (name.includes('chrome')) return '🌐';
-  if (name.includes('firefox')) return '🦊';
-  if (name.includes('edge')) return '🔷';
-  if (name.includes('brave')) return '🦁';
-  if (name.includes('opera')) return '🔴';
-  if (name.includes('safari')) return '🧭';
-  return '🌐';
-}

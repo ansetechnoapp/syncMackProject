@@ -340,3 +340,126 @@ export async function updateBookmarkInWorkspace(
 export async function batchMoveItems(operation: BatchMoveOperation): Promise<BatchMoveResult> {
   return invokeWithTimeout<BatchMoveResult>("batch_move_items", { operation }, 30000);
 }
+
+// ==================== Recherche Globale ====================
+
+export interface SearchResult {
+  workspaceId: string;
+  workspaceName: string;
+  itemType: string;
+  itemId: string;
+  title: string;
+  url?: string;
+  parentPath: string[];
+  relevanceScore: number;
+}
+
+export async function searchBookmarksGlobal(
+  query: string,
+  workspaceIds?: string[] | null
+): Promise<SearchResult[]> {
+  return invokeWithTimeout<SearchResult[]>("search_bookmarks_global", { query, workspaceIds }, 15000);
+}
+
+// ==================== Historique de Sync ====================
+
+export interface SyncLogEntry {
+  id: string;
+  timestamp: string;
+  operationType: string;
+  source: string;
+  workspaceId?: string;
+  itemsCount: number;
+  success: boolean;
+  errorMessage?: string;
+}
+
+export async function getSyncHistory(limit?: number): Promise<SyncLogEntry[]> {
+  return invokeWithTimeout<SyncLogEntry[]>("get_sync_history", { limit: limit || 100 });
+}
+
+export async function clearSyncHistory(): Promise<void> {
+  return invokeWithTimeout<void>("clear_sync_history");
+}
+
+// ==================== Smart Folders ====================
+
+export interface SmartFolderResult {
+  workspaceId: string;
+  workspaceName: string;
+  bookmarkId: string;
+  title: string;
+  url: string;
+  parentId: string;
+  domain?: string;
+}
+
+export interface DomainGroup {
+  domain: string;
+  count: number;
+  bookmarks: SmartFolderResult[];
+}
+
+export interface DuplicateGroup {
+  url: string;
+  count: number;
+  bookmarks: SmartFolderResult[];
+}
+
+export interface CustomFilter {
+  id: string;
+  name: string;
+  keyword?: string;
+  domainPattern?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  workspaceIds?: string[];
+}
+
+export async function getSmartFolderRecent(days?: number): Promise<SmartFolderResult[]> {
+  return invokeWithTimeout<SmartFolderResult[]>("get_smart_folder_recent", { days: days || 7 });
+}
+
+export async function getSmartFolderByDomain(): Promise<DomainGroup[]> {
+  return invokeWithTimeout<DomainGroup[]>("get_smart_folder_by_domain");
+}
+
+export async function getSmartFolderDuplicates(): Promise<DuplicateGroup[]> {
+  return invokeWithTimeout<DuplicateGroup[]>("get_smart_folder_duplicates");
+}
+
+export async function applyCustomSmartFilter(filter: CustomFilter): Promise<SmartFolderResult[]> {
+  return invokeWithTimeout<SmartFolderResult[]>("apply_custom_smart_filter", { filter });
+}
+
+export async function saveCustomFilter(filter: CustomFilter): Promise<void> {
+  return invokeWithTimeout<void>("save_custom_filter", { filter });
+}
+
+export async function deleteCustomFilter(filterId: string): Promise<void> {
+  return invokeWithTimeout<void>("delete_custom_filter", { filterId });
+}
+
+export async function listCustomFilters(): Promise<CustomFilter[]> {
+  return invokeWithTimeout<CustomFilter[]>("list_custom_filters");
+}
+
+// ==================== Multi-Navigateur ====================
+
+export async function assignWorkspaceToBrowserWithMode(
+  browserId: string,
+  workspaceId: string,
+  mode?: string
+): Promise<void> {
+  return invokeWithTimeout<void>("assign_workspace_to_browser_with_mode", {
+    browserId,
+    workspaceId,
+    mode: mode || "ReadWrite",
+  });
+}
+
+// ==================== Auto-Update ====================
+
+export async function checkForUpdates(): Promise<string | null> {
+  return invokeWithTimeout<string | null>("check_for_updates", undefined, 15000);
+}

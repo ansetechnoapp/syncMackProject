@@ -8,6 +8,7 @@ let reconnectTimeout = null;
 let pendingResponses = new Map();
 let messageId = 0;
 let isUpdatingFromDesktop = false; // Flag pour éviter les boucles infinies
+let isReadOnlyMode = false; // Mode lecture seule pour le workspace
 
 const ROOT_BAR_SYNC_ID = "root_bar";
 const UNASSIGNED_WORKSPACE_ID = "__unassigned__";
@@ -298,6 +299,9 @@ function handleWebSocketMessage(message) {
           break;
         }
         console.log("Switch vers workspace:", message.payload.workspaceName);
+        // Vérifier le mode (ReadOnly ou ReadWrite)
+        isReadOnlyMode = message.payload.mode === "ReadOnly";
+        console.log("Mode:", isReadOnlyMode ? "Lecture seule" : "Lecture/Écriture");
         const previous = currentWorkspace;
 
         if (previous && previous.id && previous.id !== message.payload.workspaceId) {
@@ -344,6 +348,10 @@ function handleWebSocketMessage(message) {
           workspaces: availableWorkspaces
         }).catch(() => {});
       }
+      break;
+
+    case "sync_rejected":
+      console.warn("Sync rejeté:", message.payload?.reason);
       break;
 
     case "error":
@@ -488,6 +496,7 @@ const ALLOWED_WS_TYPES = new Set([
   // Nouveaux messages pour les workspaces
   "workspace_switched",
   "workspaces_list",
+  "sync_rejected",
   "error"
 ]);
 
@@ -722,9 +731,185 @@ async function switchToWorkspaceSnapshot(workspaceId, bookmarks, folders, versio
     }
   }
 
-  await replaceAllBookmarks(workspaceId, bookmarks, folders);
+  // Mise à jour incrémentale si on a déjà des mappings (pas un premier chargement/switch)
+  const hasExistingMappings = workspaceState.syncToChrome.size > 1 && !isWorkspaceSwitching;
+  if (hasExistingMappings) {
+    await applyIncrementalUpdate(workspaceId, bookmarks, folders);
+  } else {
+    await replaceAllBookmarks(workspaceId, bookmarks, folders);
+  }
+
   if (currentWorkspace) {
     currentWorkspace.version = version;
+  }
+}
+
+/**
+ * Mise à jour incrémentale : met à jour/crée/supprime les items un par un
+ * au lieu de tout supprimer et recréer (évite le flicker)
+ */
+async function applyIncrementalUpdate(workspaceId, bookmarks, folders) {
+  isUpdatingFromDesktop = true;
+
+  try {
+    // Construire les maps des items entrants par syncId
+    const incomingFoldersBySyncId = new Map();
+    for (const f of (folders || [])) {
+      const syncId = f.syncId || f.sync_id || f.id;
+      if (syncId && syncId !== ROOT_BAR_SYNC_ID) {
+        incomingFoldersBySyncId.set(syncId, f);
+      }
+    }
+
+    const incomingBookmarksBySyncId = new Map();
+    for (const b of (bookmarks || [])) {
+      const syncId = b.syncId || b.sync_id || b.id;
+      if (syncId) {
+        incomingBookmarksBySyncId.set(syncId, b);
+      }
+    }
+
+    // 1. Supprimer les items locaux absents de incoming
+    const syncToChromeCopy = new Map(workspaceState.syncToChrome);
+    for (const [syncId, chromeId] of syncToChromeCopy) {
+      if (syncId === ROOT_BAR_SYNC_ID) continue;
+
+      const inFolder = incomingFoldersBySyncId.has(syncId);
+      const inBookmark = incomingBookmarksBySyncId.has(syncId);
+      const isDeletedFolder = inFolder && incomingFoldersBySyncId.get(syncId).deleted;
+      const isDeletedBookmark = inBookmark && incomingBookmarksBySyncId.get(syncId).deleted;
+
+      if ((!inFolder && !inBookmark) || isDeletedFolder || isDeletedBookmark) {
+        try {
+          await chrome.bookmarks.removeTree(chromeId);
+        } catch (e) {
+          // Déjà supprimé ou n'existe pas
+        }
+        workspaceState.syncToChrome.delete(syncId);
+        workspaceState.chromeToSync.delete(chromeId);
+        workspaceState.lamportBySync.delete(syncId);
+      }
+    }
+
+    // 2. Créer/mettre à jour les dossiers (triés par profondeur, parents d'abord)
+    const sortedFolders = (folders || []).filter(f => {
+      if (f.deleted) return false;
+      const syncId = f.syncId || f.sync_id || f.id;
+      return syncId !== ROOT_BAR_SYNC_ID;
+    }).sort((a, b) => {
+      const depthA = getParentDepth(a.parentId, folders);
+      const depthB = getParentDepth(b.parentId, folders);
+      return depthA - depthB;
+    });
+
+    for (const folder of sortedFolders) {
+      const syncId = folder.syncId || folder.sync_id || folder.id;
+      const existingChromeId = workspaceState.syncToChrome.get(syncId);
+      const parentSyncId = folder.parentId || ROOT_BAR_SYNC_ID;
+      const parentChromeId = getChromeIdForSyncId(workspaceId, parentSyncId) || "1";
+
+      if (existingChromeId) {
+        // Mettre à jour le dossier existant
+        try {
+          const [existing] = await chrome.bookmarks.get(existingChromeId);
+          if (existing.title !== folder.title) {
+            await chrome.bookmarks.update(existingChromeId, { title: folder.title });
+          }
+          if (existing.parentId !== parentChromeId) {
+            await chrome.bookmarks.move(existingChromeId, { parentId: parentChromeId });
+          }
+        } catch (e) {
+          // Le dossier n'existe plus, le recréer
+          try {
+            const created = await chrome.bookmarks.create({
+              parentId: parentChromeId,
+              title: folder.title
+            });
+            workspaceState.chromeToSync.delete(existingChromeId);
+            workspaceState.chromeToSync.set(created.id, syncId);
+            workspaceState.syncToChrome.set(syncId, created.id);
+          } catch (e2) {
+            console.error("Erreur re-création dossier:", folder.title, e2);
+          }
+        }
+      } else {
+        // Créer un nouveau dossier
+        try {
+          const created = await chrome.bookmarks.create({
+            parentId: parentChromeId,
+            title: folder.title
+          });
+          workspaceState.chromeToSync.set(created.id, syncId);
+          workspaceState.syncToChrome.set(syncId, created.id);
+        } catch (e) {
+          console.error("Erreur création dossier:", folder.title, e);
+        }
+      }
+
+      const lamport = Number(folder.updatedAtLamport || folder.updated_at_lamport || 0);
+      workspaceState.lamportBySync.set(syncId, lamport);
+    }
+
+    // 3. Créer/mettre à jour les bookmarks
+    for (const bookmark of (bookmarks || []).filter(b => !b.deleted)) {
+      if (!bookmark.url) continue;
+
+      const syncId = bookmark.syncId || bookmark.sync_id || bookmark.id;
+      const existingChromeId = workspaceState.syncToChrome.get(syncId);
+      const parentSyncId = bookmark.parentId || ROOT_BAR_SYNC_ID;
+      const parentChromeId = getChromeIdForSyncId(workspaceId, parentSyncId) || "1";
+
+      if (existingChromeId) {
+        // Mettre à jour le bookmark existant
+        try {
+          const [existing] = await chrome.bookmarks.get(existingChromeId);
+          if (existing.title !== bookmark.title || existing.url !== bookmark.url) {
+            await chrome.bookmarks.update(existingChromeId, {
+              title: bookmark.title || bookmark.url,
+              url: bookmark.url
+            });
+          }
+          if (existing.parentId !== parentChromeId) {
+            await chrome.bookmarks.move(existingChromeId, { parentId: parentChromeId });
+          }
+        } catch (e) {
+          // Le bookmark n'existe plus, le recréer
+          try {
+            const created = await chrome.bookmarks.create({
+              parentId: parentChromeId,
+              title: bookmark.title || bookmark.url,
+              url: bookmark.url
+            });
+            workspaceState.chromeToSync.delete(existingChromeId);
+            workspaceState.chromeToSync.set(created.id, syncId);
+            workspaceState.syncToChrome.set(syncId, created.id);
+          } catch (e2) {
+            console.error("Erreur re-création favori:", bookmark.title, e2);
+          }
+        }
+      } else {
+        // Créer un nouveau bookmark
+        try {
+          const created = await chrome.bookmarks.create({
+            parentId: parentChromeId,
+            title: bookmark.title || bookmark.url,
+            url: bookmark.url
+          });
+          workspaceState.chromeToSync.set(created.id, syncId);
+          workspaceState.syncToChrome.set(syncId, created.id);
+        } catch (e) {
+          console.error("Erreur création favori:", bookmark.title, e);
+        }
+      }
+
+      const lamport = Number(bookmark.updatedAtLamport || bookmark.updated_at_lamport || 0);
+      workspaceState.lamportBySync.set(syncId, lamport);
+    }
+
+    await persistWorkspaceState(workspaceId);
+    console.log(`Mise à jour incrémentale: ${bookmarks?.length || 0} favoris, ${folders?.length || 0} dossiers`);
+  } finally {
+    isUpdatingFromDesktop = false;
   }
 }
 
@@ -980,6 +1165,7 @@ function debounceBookmarkChange(callback, delay = 1000) {
 chrome.bookmarks.onCreated.addListener((id, bookmark) => {
   if (isUpdatingFromDesktop) return; // Ignorer si mise à jour depuis desktop
   if (!currentWorkspace || isWorkspaceSwitching) return;
+  if (isReadOnlyMode) return; // Mode lecture seule
 
   // Distinguer dossier vs favori (un dossier n'a pas d'URL)
   const isFolder = !bookmark.url;
@@ -1007,6 +1193,7 @@ chrome.bookmarks.onCreated.addListener((id, bookmark) => {
 chrome.bookmarks.onRemoved.addListener((id, removeInfo) => {
   if (isUpdatingFromDesktop) return; // Ignorer si mise à jour depuis desktop
   if (!currentWorkspace || isWorkspaceSwitching) return;
+  if (isReadOnlyMode) return; // Mode lecture seule
 
   // removeInfo.node contient les infos du nœud supprimé
   const isFolder = removeInfo.node && !removeInfo.node.url;
@@ -1025,6 +1212,7 @@ chrome.bookmarks.onRemoved.addListener((id, removeInfo) => {
 chrome.bookmarks.onChanged.addListener(async (id, changeInfo) => {
   if (isUpdatingFromDesktop) return; // Ignorer si mise à jour depuis desktop
   if (!currentWorkspace || isWorkspaceSwitching) return;
+  if (isReadOnlyMode) return; // Mode lecture seule
 
   if (isWebSocketConnected) {
     // Récupérer les données complètes du favori/dossier
@@ -1057,6 +1245,7 @@ chrome.bookmarks.onChanged.addListener(async (id, changeInfo) => {
 chrome.bookmarks.onMoved.addListener(async (id, moveInfo) => {
   if (isUpdatingFromDesktop) return; // Ignorer si mise à jour depuis desktop
   if (!currentWorkspace || isWorkspaceSwitching) return;
+  if (isReadOnlyMode) return; // Mode lecture seule
   console.log("Favori/Dossier déplacé:", id, moveInfo);
 
   // Envoyer uniquement les informations de déplacement (sync incrémentale)
