@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useDroppable } from '@dnd-kit/core';
 import { listen } from '@tauri-apps/api/event';
 import { Virtuoso } from 'react-virtuoso';
+import { Plus, FolderPlus } from 'lucide-react';
 import { getWorkspaceTree, BookmarksTree, ConnectedClient, WorkspaceAssignment } from '../hooks/useTauriCommands';
 import { BookmarkItem } from './BookmarkItem';
 import type { BookmarkNode } from './BookmarkItem';
@@ -36,7 +37,7 @@ export default function WorkspaceColumn({
 }: WorkspaceColumnProps) {
   const [tree, setTree] = useState<BookmarksTree | null>(null);
   const [loading, setLoading] = useState(true);
-  
+
   const { setNodeRef, isOver } = useDroppable({
     id: workspaceId,
     data: { type: 'workspace', workspaceId }
@@ -109,52 +110,56 @@ export default function WorkspaceColumn({
   };
 
   return (
-    <div className="workspace-column" style={{ borderTop: `4px solid ${color}` }}>
-      <div className="column-header" style={{ backgroundColor: `${color}15` }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-            <h3 style={{ color: color, margin: 0 }}>{title}</h3>
-            <span className="badge" title={`${bookmarkCount} favoris, ${folderCount} dossiers`}>
-                {bookmarkCount} fav, {folderCount} dos
-            </span>
+    <div className="workspace-column" style={{ borderTop: `3px solid ${color}` }}>
+      <div className="column-header">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+          <h3 style={{ color: color, margin: 0, fontSize: '15px', fontWeight: '700' }}>{title}</h3>
+          <span className="badge" title={`${bookmarkCount} favoris, ${folderCount} dossiers`}>
+            {bookmarkCount} items
+          </span>
         </div>
-        <div style={{ marginBottom: '6px' }}>
-            <select
-                value={assignedBrowserId}
-                onChange={handleBrowserChange}
-                className="browser-select-compact"
-            >
-                <option value="">-- Aucun navigateur --</option>
-                {clients.map(client => {
-                    const browserId = client.browser_instance_id;
-                    const label = (!client.browser || client.browser === "Unknown" || client.browser === "Unknown Browser")
-                        ? "Navigateur Inconnu"
-                        : client.browser;
-                    return (
-                        <option key={client.id} value={browserId}>
-                            {label}
-                        </option>
-                    );
-                })}
-            </select>
+
+        <div style={{ marginBottom: '12px' }}>
+          <select
+            value={assignedBrowserId}
+            onChange={handleBrowserChange}
+            className="browser-select-compact"
+          >
+            <option value="">-- Assigner un navigateur --</option>
+            {clients.map(client => {
+              const browserId = client.browser_instance_id;
+              const label = (!client.browser || client.browser === "Unknown" || client.browser === "Unknown Browser")
+                ? "Navigateur Inconnu"
+                : `${client.browser}`;
+              return (
+                <option key={client.id} value={browserId}>
+                  {label}
+                </option>
+              );
+            })}
+          </select>
         </div>
-        <div style={{ display: 'flex', gap: '5px' }}>
-            <button
-                className="btn-xs btn-outline"
-                onClick={() => onAddBookmark(workspaceId)}
-                title="Ajouter un favori"
-            >
-                + Favori
-            </button>
-            <button
-                className="btn-xs btn-outline"
-                onClick={() => onAddFolder(workspaceId)}
-                title="Ajouter un dossier"
-            >
-                + Dossier
-            </button>
+
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button
+            className="btn-xs btn-outline"
+            style={{ flex: 1, justifyContent: 'center', display: 'flex', alignItems: 'center', gap: '6px' }}
+            onClick={() => onAddBookmark(workspaceId)}
+            title="Ajouter un favori"
+          >
+            <Plus size={14} /> Favori
+          </button>
+          <button
+            className="btn-xs btn-outline"
+            style={{ flex: 1, justifyContent: 'center', display: 'flex', alignItems: 'center', gap: '6px' }}
+            onClick={() => onAddFolder(workspaceId)}
+            title="Ajouter un dossier"
+          >
+            <FolderPlus size={14} /> Dossier
+          </button>
         </div>
       </div>
-      
+
       <div
         ref={setNodeRef}
         className={`column-body ${isOver ? 'is-over' : ''}`}
