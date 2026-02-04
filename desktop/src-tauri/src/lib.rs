@@ -59,6 +59,11 @@ pub fn run() {
             update_workspace,
             delete_workspace,
             duplicate_workspace,
+            // Commandes Corbeille
+            get_deleted_workspaces,
+            restore_workspace,
+            permanently_delete_workspace,
+            empty_trash,
             get_workspace_assignments,
             assign_workspace_to_browser,
             unassign_workspace_from_browser,

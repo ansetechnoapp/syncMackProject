@@ -5,6 +5,7 @@ import WorkspacesPanel from "./components/WorkspacesPanel";
 import SearchPanel from "./components/SearchPanel";
 import SmartFolders from "./components/SmartFolders";
 import SyncHistory from "./components/SyncHistory";
+import WorkspaceTrash from "./components/WorkspaceTrash";
 import { ToastProvider } from "./components/Toast";
 import { ThemeProvider } from "./hooks/useTheme";
 import "./styles/global.css";
@@ -17,10 +18,11 @@ import {
   History,
   Settings as SettingsIcon,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Archive
 } from "lucide-react";
 
-type Tab = "dashboard" | "workspaces" | "search" | "smart-folders" | "sync-history" | "settings";
+type Tab = "dashboard" | "workspaces" | "search" | "smart-folders" | "sync-history" | "trash" | "settings";
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
@@ -99,6 +101,16 @@ function App() {
               </li>
               <li>
                 <button
+                  className={activeTab === "trash" ? "active" : ""}
+                  onClick={() => setActiveTab("trash")}
+                  title="Corbeille"
+                >
+                  <span className="icon"><Archive size={20} /></span>
+                  {!isSidebarCollapsed && "Stockage"}
+                </button>
+              </li>
+              <li>
+                <button
                   className={activeTab === "settings" ? "active" : ""}
                   onClick={() => setActiveTab("settings")}
                   title="Paramètres"
@@ -127,6 +139,7 @@ function App() {
             {activeTab === "search" && <SearchPanel />}
             {activeTab === "smart-folders" && <SmartFolders />}
             {activeTab === "sync-history" && <SyncHistory />}
+            {activeTab === "trash" && <WorkspaceTrash />}
             {activeTab === "settings" && <Settings />}
           </main>
         </div>

@@ -346,6 +346,9 @@ pub fn delete_workspace(state: State<SharedState>, workspace_id: String) -> Resu
     let workspaces = WorkspaceManager::list_workspaces();
     state.emit_to_frontend("workspaces_updated", &workspaces);
 
+    let deleted = WorkspaceManager::get_deleted_workspaces();
+    state.emit_to_frontend("deleted_workspaces_updated", &deleted);
+
     Ok(())
 }
 
@@ -364,6 +367,52 @@ pub fn duplicate_workspace(
     state.emit_to_frontend("workspaces_updated", &workspaces);
 
     Ok(workspace)
+}
+
+/// Liste les workspaces supprimés (corbeille)
+#[tauri::command]
+pub fn get_deleted_workspaces() -> Vec<crate::workspace::DeletedWorkspace> {
+    WorkspaceManager::get_deleted_workspaces()
+}
+
+/// Restaure un workspace depuis la corbeille
+#[tauri::command]
+pub fn restore_workspace(state: State<SharedState>, workspace_id: String) -> Result<Workspace, String> {
+    let workspace = WorkspaceManager::restore_workspace(&workspace_id)?;
+    state.update_workspace_cache(&workspace);
+    state.reload_workspaces_index();
+
+    let workspaces = WorkspaceManager::list_workspaces();
+    state.emit_to_frontend("workspaces_updated", &workspaces);
+
+    let deleted = WorkspaceManager::get_deleted_workspaces();
+    state.emit_to_frontend("deleted_workspaces_updated", &deleted);
+
+    Ok(workspace)
+}
+
+/// Supprime définitivement un workspace de la corbeille
+#[tauri::command]
+pub fn permanently_delete_workspace(state: State<SharedState>, workspace_id: String) -> Result<(), String> {
+    WorkspaceManager::permanently_delete_workspace(&workspace_id)?;
+    state.reload_workspaces_index();
+
+    let deleted = WorkspaceManager::get_deleted_workspaces();
+    state.emit_to_frontend("deleted_workspaces_updated", &deleted);
+
+    Ok(())
+}
+
+/// Vide complètement la corbeille
+#[tauri::command]
+pub fn empty_trash(state: State<SharedState>) -> Result<usize, String> {
+    let count = WorkspaceManager::empty_trash()?;
+    state.reload_workspaces_index();
+
+    let deleted = WorkspaceManager::get_deleted_workspaces();
+    state.emit_to_frontend("deleted_workspaces_updated", &deleted);
+
+    Ok(count)
 }
 
 /// Obtient toutes les assignments (workspace <-> navigateur)

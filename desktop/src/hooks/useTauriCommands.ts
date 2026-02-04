@@ -264,6 +264,35 @@ export async function duplicateWorkspace(workspaceId: string, newName: string): 
   return invokeWithTimeout<Workspace>("duplicate_workspace", { workspaceId, newName });
 }
 
+// ==================== Corbeille Workspaces ====================
+
+export interface DeletedWorkspace {
+  id: string;
+  name: string;
+  color?: string;
+  icon?: string;
+  totalBookmarks: number;
+  totalFolders: number;
+  deletedAt: string;
+  backupPath: string;
+}
+
+export async function getDeletedWorkspaces(): Promise<DeletedWorkspace[]> {
+  return invokeWithTimeout<DeletedWorkspace[]>("get_deleted_workspaces");
+}
+
+export async function restoreWorkspace(workspaceId: string): Promise<Workspace> {
+  return invokeWithTimeout<Workspace>("restore_workspace", { workspaceId });
+}
+
+export async function permanentlyDeleteWorkspace(workspaceId: string): Promise<void> {
+  return invokeWithTimeout<void>("permanently_delete_workspace", { workspaceId });
+}
+
+export async function emptyTrash(): Promise<number> {
+  return invokeWithTimeout<number>("empty_trash");
+}
+
 export async function getWorkspaceAssignments(): Promise<WorkspaceAssignment[]> {
   return invokeWithTimeout<WorkspaceAssignment[]>("get_workspace_assignments");
 }

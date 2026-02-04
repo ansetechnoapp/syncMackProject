@@ -154,6 +154,21 @@ pub struct WorkspaceAssignment {
     pub mode: AssignmentMode,
 }
 
+/// Workspace supprimé (corbeille)
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletedWorkspace {
+    pub id: String,
+    pub name: String,
+    pub color: Option<String>,
+    pub icon: Option<String>,
+    pub total_bookmarks: usize,
+    pub total_folders: usize,
+    pub deleted_at: DateTime<Utc>,
+    /// Chemin vers le fichier de sauvegarde du workspace
+    pub backup_path: String,
+}
+
 /// Index central des workspaces
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -164,6 +179,8 @@ pub struct WorkspacesIndex {
     pub assignments: Vec<WorkspaceAssignment>,
     #[serde(default)]
     pub default_workspace_id: Option<String>,
+    #[serde(default)]
+    pub deleted_workspaces: Vec<DeletedWorkspace>,
     pub last_updated: DateTime<Utc>,
 }
 
@@ -178,6 +195,7 @@ impl Default for WorkspacesIndex {
             workspaces: vec![],
             assignments: vec![],
             default_workspace_id: None,
+            deleted_workspaces: vec![],
             last_updated: Utc::now(),
         }
     }
@@ -688,36 +706,159 @@ impl WorkspaceManager {
         Ok(workspace)
     }
 
-    /// Supprime un workspace
+    /// Supprime un workspace (déplace vers la corbeille)
     pub fn delete_workspace(id: &str) -> Result<(), String> {
+        let workspace = Self::load_workspace(id)?;
         let path = Self::get_workspace_path(id)?;
 
+        // Créer le dossier de la corbeille
+        let trash_dir = Self::get_trash_dir();
+        Self::ensure_dir(&trash_dir);
+
+        // Déplacer le fichier workspace vers la corbeille
+        let trash_path = trash_dir.join(format!("{}.json", id));
         if path.exists() {
-            fs::remove_file(&path)
-                .map_err(|e| format!("Échec suppression workspace: {}", e))?;
+            // Sur Windows, rename échoue si la destination existe. On supprime d'abord.
+            if trash_path.exists() {
+                let _ = fs::remove_file(&trash_path);
+            }
+            fs::rename(&path, &trash_path)
+                .map_err(|e| format!("Échec déplacement vers corbeille: {}", e))?;
         }
 
         // Supprimer le backup s'il existe
         let bak_path = path.with_extension("bak");
         let _ = fs::remove_file(&bak_path);
 
-        // Supprimer le fichier de version log
+        // Déplacer le fichier de version log vers la corbeille
         if let Ok(log_path) = Self::get_version_log_path(id) {
-            let _ = fs::remove_file(&log_path);
+            if log_path.exists() {
+                let trash_log_path = trash_dir.join(format!("{}_log.json", id));
+                if trash_log_path.exists() {
+                    let _ = fs::remove_file(&trash_log_path);
+                }
+                let _ = fs::rename(&log_path, &trash_log_path);
+            }
         }
+
+        // Créer l'entrée DeletedWorkspace
+        let deleted_entry = DeletedWorkspace {
+            id: workspace.id.clone(),
+            name: workspace.name.clone(),
+            color: workspace.color.clone(),
+            icon: workspace.icon.clone(),
+            total_bookmarks: workspace.bookmarks.iter().filter(|b| !b.deleted).count(),
+            total_folders: workspace.folders.iter().filter(|f| !f.deleted).count(),
+            deleted_at: Utc::now(),
+            backup_path: trash_path.to_string_lossy().to_string(),
+        };
 
         let id_owned = id.to_string();
         Self::with_index(|index| {
+            // Retirer de la liste des workspaces actifs
             index.workspaces.retain(|w| w.id != id_owned);
             index.assignments.retain(|a| a.workspace_id.as_deref() != Some(id_owned.as_str()));
             if index.default_workspace_id.as_deref() == Some(id_owned.as_str()) {
                 index.default_workspace_id = None;
             }
+            // Ajouter à la corbeille
+            index.deleted_workspaces.push(deleted_entry);
             Ok(())
         })?;
 
-        info!("Workspace supprimé: {}", id);
+        info!("Workspace déplacé vers la corbeille: {}", id);
         Ok(())
+    }
+
+    /// Retourne le dossier de la corbeille
+    pub fn get_trash_dir() -> std::path::PathBuf {
+        ConfigManager::get_sync_dir().join("trash")
+    }
+
+    /// Liste les workspaces supprimés (corbeille)
+    pub fn get_deleted_workspaces() -> Vec<DeletedWorkspace> {
+        Self::read_index(|index| index.deleted_workspaces.clone())
+    }
+
+    /// Restaure un workspace depuis la corbeille
+    pub fn restore_workspace(id: &str) -> Result<Workspace, String> {
+        let trash_dir = Self::get_trash_dir();
+        let trash_path = trash_dir.join(format!("{}.json", id));
+
+        if !trash_path.exists() {
+            return Err(format!("Workspace non trouvé dans la corbeille: {}", id));
+        }
+
+        // Charger le workspace depuis la corbeille
+        let content = fs::read_to_string(&trash_path)
+            .map_err(|e| format!("Échec lecture workspace: {}", e))?;
+        let mut workspace: Workspace = serde_json::from_str(&content)
+            .map_err(|e| format!("Échec parsing workspace: {}", e))?;
+
+        // Mettre à jour la date
+        workspace.updated_at = Utc::now();
+
+        // Sauvegarder dans le dossier des workspaces actifs
+        Self::save_workspace(&workspace)?;
+
+        // Supprimer de la corbeille
+        let _ = fs::remove_file(&trash_path);
+
+        // Restaurer aussi le version log s'il existe
+        let trash_log_path = trash_dir.join(format!("{}_log.json", id));
+        if trash_log_path.exists() {
+            if let Ok(target_log_path) = Self::get_version_log_path(id) {
+                let _ = fs::rename(&trash_log_path, &target_log_path);
+            }
+        }
+
+        let id_owned = id.to_string();
+        Self::with_index(|index| {
+            // Retirer de la corbeille
+            index.deleted_workspaces.retain(|w| w.id != id_owned);
+            // Ajouter à la liste des workspaces actifs
+            Self::update_index_summary(index, &workspace);
+            Ok(())
+        })?;
+
+        info!("Workspace restauré depuis la corbeille: {}", id);
+        Ok(workspace)
+    }
+
+    /// Supprime définitivement un workspace de la corbeille
+    pub fn permanently_delete_workspace(id: &str) -> Result<(), String> {
+        let trash_dir = Self::get_trash_dir();
+        let trash_path = trash_dir.join(format!("{}.json", id));
+        let trash_log_path = trash_dir.join(format!("{}_log.json", id));
+
+        // Supprimer les fichiers de la corbeille
+        if trash_path.exists() {
+            fs::remove_file(&trash_path)
+                .map_err(|e| format!("Échec suppression définitive: {}", e))?;
+        }
+        let _ = fs::remove_file(&trash_log_path);
+
+        let id_owned = id.to_string();
+        Self::with_index(|index| {
+            index.deleted_workspaces.retain(|w| w.id != id_owned);
+            Ok(())
+        })?;
+
+        info!("Workspace supprimé définitivement: {}", id);
+        Ok(())
+    }
+
+    /// Vide complètement la corbeille
+    pub fn empty_trash() -> Result<usize, String> {
+        let deleted = Self::get_deleted_workspaces();
+        let count = deleted.len();
+
+        for ws in deleted {
+            let _ = Self::permanently_delete_workspace(&ws.id);
+        }
+
+        info!("Corbeille vidée: {} workspace(s) supprimé(s)", count);
+        Ok(count)
     }
 
     /// Duplique un workspace
