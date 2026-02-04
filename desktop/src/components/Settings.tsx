@@ -201,246 +201,248 @@ function Settings() {
   }
 
   return (
-    <div className="settings">
-      <h2>Paramètres</h2>
+    <div className="scrollable-page">
+      <div className="settings">
+        <h2>Paramètres</h2>
 
-      {message && (
-        <div className={`message ${message.type}`}>
-          {message.text}
-        </div>
-      )}
-
-      <div className="settings-section">
-        <h3>Synchronisation</h3>
-
-        <div className="setting-item">
-          <div className="setting-info">
-            <label>Synchronisation activée</label>
-            <span className="setting-description">
-              Activer ou désactiver la synchronisation automatique
-            </span>
+        {message && (
+          <div className={`message ${message.type}`}>
+            {message.text}
           </div>
-          <label className="switch">
+        )}
+
+        <div className="settings-section">
+          <h3>Synchronisation</h3>
+
+          <div className="setting-item">
+            <div className="setting-info">
+              <label>Synchronisation activée</label>
+              <span className="setting-description">
+                Activer ou désactiver la synchronisation automatique
+              </span>
+            </div>
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={config.enabled}
+                onChange={(e) => updateConfig("enabled", e.target.checked)}
+              />
+              <span className="slider"></span>
+            </label>
+          </div>
+
+          <div className="setting-item">
+            <div className="setting-info">
+              <label>Synchronisation automatique</label>
+              <span className="setting-description">
+                Synchroniser automatiquement lors des modifications
+              </span>
+            </div>
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={config.auto_sync}
+                onChange={(e) => updateConfig("auto_sync", e.target.checked)}
+              />
+              <span className="slider"></span>
+            </label>
+          </div>
+
+          <div className="setting-item">
+            <div className="setting-info">
+              <label>Intervalle de synchronisation</label>
+              <span className="setting-description">
+                Temps entre les synchronisations automatiques (en secondes)
+              </span>
+            </div>
             <input
-              type="checkbox"
-              checked={config.enabled}
-              onChange={(e) => updateConfig("enabled", e.target.checked)}
+              type="number"
+              className="input-number"
+              value={config.sync_interval}
+              min={60}
+              max={3600}
+              onChange={(e) => updateConfig("sync_interval", parseInt(e.target.value) || 300)}
             />
-            <span className="slider"></span>
-          </label>
-        </div>
-
-        <div className="setting-item">
-          <div className="setting-info">
-            <label>Synchronisation automatique</label>
-            <span className="setting-description">
-              Synchroniser automatiquement lors des modifications
-            </span>
           </div>
-          <label className="switch">
+
+          <div className="setting-item">
+            <div className="setting-info">
+              <label>Nombre maximum de favoris</label>
+              <span className="setting-description">
+                Limite le nombre de favoris à synchroniser
+              </span>
+            </div>
             <input
-              type="checkbox"
-              checked={config.auto_sync}
-              onChange={(e) => updateConfig("auto_sync", e.target.checked)}
+              type="number"
+              className="input-number"
+              value={config.max_bookmarks}
+              min={100}
+              max={50000}
+              onChange={(e) => updateConfig("max_bookmarks", parseInt(e.target.value) || 10000)}
             />
-            <span className="slider"></span>
-          </label>
+          </div>
         </div>
 
-        <div className="setting-item">
-          <div className="setting-info">
-            <label>Intervalle de synchronisation</label>
-            <span className="setting-description">
-              Temps entre les synchronisations automatiques (en secondes)
-            </span>
+        <div className="settings-section">
+          <h3>Sauvegarde</h3>
+
+          <div className="setting-item">
+            <div className="setting-info">
+              <label>Sauvegardes automatiques</label>
+              <span className="setting-description">
+                Créer des sauvegardes avant chaque synchronisation
+              </span>
+            </div>
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={config.backup_enabled}
+                onChange={(e) => updateConfig("backup_enabled", e.target.checked)}
+              />
+              <span className="slider"></span>
+            </label>
           </div>
-          <input
-            type="number"
-            className="input-number"
-            value={config.sync_interval}
-            min={60}
-            max={3600}
-            onChange={(e) => updateConfig("sync_interval", parseInt(e.target.value) || 300)}
-          />
         </div>
 
-        <div className="setting-item">
-          <div className="setting-info">
-            <label>Nombre maximum de favoris</label>
-            <span className="setting-description">
-              Limite le nombre de favoris à synchroniser
-            </span>
-          </div>
-          <input
-            type="number"
-            className="input-number"
-            value={config.max_bookmarks}
-            min={100}
-            max={50000}
-            onChange={(e) => updateConfig("max_bookmarks", parseInt(e.target.value) || 10000)}
-          />
-        </div>
-      </div>
+        <div className="settings-section">
+          <h3>Réseau</h3>
 
-      <div className="settings-section">
-        <h3>Sauvegarde</h3>
-
-        <div className="setting-item">
-          <div className="setting-info">
-            <label>Sauvegardes automatiques</label>
-            <span className="setting-description">
-              Créer des sauvegardes avant chaque synchronisation
-            </span>
-          </div>
-          <label className="switch">
+          <div className="setting-item">
+            <div className="setting-info">
+              <label>Port WebSocket</label>
+              <span className="setting-description">
+                Port pour la communication avec les extensions (redémarrage requis)
+              </span>
+            </div>
             <input
-              type="checkbox"
-              checked={config.backup_enabled}
-              onChange={(e) => updateConfig("backup_enabled", e.target.checked)}
+              type="number"
+              className="input-number"
+              value={config.websocket_port}
+              min={1024}
+              max={65535}
+              onChange={(e) => updateConfig("websocket_port", parseInt(e.target.value) || 9876)}
             />
-            <span className="slider"></span>
-          </label>
-        </div>
-      </div>
-
-      <div className="settings-section">
-        <h3>Réseau</h3>
-
-        <div className="setting-item">
-          <div className="setting-info">
-            <label>Port WebSocket</label>
-            <span className="setting-description">
-              Port pour la communication avec les extensions (redémarrage requis)
-            </span>
-          </div>
-          <input
-            type="number"
-            className="input-number"
-            value={config.websocket_port}
-            min={1024}
-            max={65535}
-            onChange={(e) => updateConfig("websocket_port", parseInt(e.target.value) || 9876)}
-          />
-        </div>
-      </div>
-
-      <div className="settings-section">
-        <h3>Stockage</h3>
-
-        <div className="setting-item">
-          <div className="setting-info">
-            <label>Répertoire de données</label>
-            <span className="setting-description data-path">{dataDir}</span>
           </div>
         </div>
-      </div>
 
-      <div className="settings-section">
-        <h3>Import / Export</h3>
+        <div className="settings-section">
+          <h3>Stockage</h3>
 
-        <div className="setting-item">
-          <div className="setting-info">
-            <label>Exporter un workspace</label>
-            <span className="setting-description">
-              Exporte un workspace en JSON dans le dossier exports
-            </span>
+          <div className="setting-item">
+            <div className="setting-info">
+              <label>Répertoire de données</label>
+              <span className="setting-description data-path">{dataDir}</span>
+            </div>
           </div>
-          <div className="inline-controls">
-            <select value={exportWorkspaceId} onChange={(e) => setExportWorkspaceId(e.target.value)}>
-              {workspaces.map((ws) => (
-                <option key={ws.id} value={ws.id}>
-                  {ws.name}
-                </option>
-              ))}
-            </select>
-            <button className="btn btn-primary" onClick={handleExportWorkspace}>
-              Exporter
+        </div>
+
+        <div className="settings-section">
+          <h3>Import / Export</h3>
+
+          <div className="setting-item">
+            <div className="setting-info">
+              <label>Exporter un workspace</label>
+              <span className="setting-description">
+                Exporte un workspace en JSON dans le dossier exports
+              </span>
+            </div>
+            <div className="inline-controls">
+              <select value={exportWorkspaceId} onChange={(e) => setExportWorkspaceId(e.target.value)}>
+                {workspaces.map((ws) => (
+                  <option key={ws.id} value={ws.id}>
+                    {ws.name}
+                  </option>
+                ))}
+              </select>
+              <button className="btn btn-primary" onClick={handleExportWorkspace}>
+                Exporter
+              </button>
+            </div>
+          </div>
+          {exportResult && <div className="setting-hint">Fichier: {exportResult}</div>}
+
+          <div className="setting-item">
+            <div className="setting-info">
+              <label>Importer un workspace</label>
+              <span className="setting-description">
+                Import en mode création (nouvel ID)
+              </span>
+            </div>
+            <div className="inline-controls">
+              <button className="btn btn-secondary" onClick={handlePickImportFile}>
+                Parcourir...
+              </button>
+              {importPath && <span className="setting-description" style={{ fontSize: 11 }}>{importPath}</span>}
+              <button className="btn btn-primary" onClick={handleImportWorkspace} disabled={!importPath.trim()}>
+                Importer
+              </button>
+            </div>
+          </div>
+          {importResult && <div className="setting-hint">Workspace créé: {importResult}</div>}
+        </div>
+
+        <div className="settings-section">
+          <h3>Sauvegarde / Restauration</h3>
+
+          <div className="setting-item">
+            <div className="setting-info">
+              <label>Sauvegarde complète</label>
+              <span className="setting-description">
+                Crée un backup complet (index + workspaces)
+              </span>
+            </div>
+            <button className="btn btn-primary" onClick={handleBackup}>
+              Créer une sauvegarde
             </button>
           </div>
+          {backupResult && <div className="setting-hint">Backup: {backupResult}</div>}
+
+          <div className="setting-item">
+            <div className="setting-info">
+              <label>Restaurer un backup</label>
+              <span className="setting-description">
+                Restaure depuis un fichier backup JSON
+              </span>
+            </div>
+            <div className="inline-controls">
+              <button className="btn btn-secondary" onClick={handlePickRestoreFile}>
+                Parcourir...
+              </button>
+              {restorePath && <span className="setting-description" style={{ fontSize: 11 }}>{restorePath}</span>}
+              <button className="btn btn-primary" onClick={handleRestore} disabled={!restorePath.trim()}>
+                Restaurer
+              </button>
+            </div>
+          </div>
+          {restoreResult && <div className="setting-hint">Backup pré-restauration: {restoreResult}</div>}
         </div>
-        {exportResult && <div className="setting-hint">Fichier: {exportResult}</div>}
 
-        <div className="setting-item">
-          <div className="setting-info">
-            <label>Importer un workspace</label>
-            <span className="setting-description">
-              Import en mode création (nouvel ID)
-            </span>
-          </div>
-          <div className="inline-controls">
-            <button className="btn btn-secondary" onClick={handlePickImportFile}>
-              Parcourir...
-            </button>
-            {importPath && <span className="setting-description" style={{ fontSize: 11 }}>{importPath}</span>}
-            <button className="btn btn-primary" onClick={handleImportWorkspace} disabled={!importPath.trim()}>
-              Importer
+        <div className="settings-section">
+          <h3>Mises à jour</h3>
+
+          <div className="setting-item">
+            <div className="setting-info">
+              <label>Vérifier les mises à jour</label>
+              <span className="setting-description">
+                Recherche de nouvelles versions de SyncMark
+              </span>
+            </div>
+            <button className="btn btn-primary" onClick={handleCheckUpdates} disabled={checkingUpdate}>
+              {checkingUpdate ? "Vérification..." : "Vérifier"}
             </button>
           </div>
+          {updateStatus && <div className="setting-hint">{updateStatus}</div>}
         </div>
-        {importResult && <div className="setting-hint">Workspace créé: {importResult}</div>}
-      </div>
 
-      <div className="settings-section">
-        <h3>Sauvegarde / Restauration</h3>
-
-        <div className="setting-item">
-          <div className="setting-info">
-            <label>Sauvegarde complète</label>
-            <span className="setting-description">
-              Crée un backup complet (index + workspaces)
-            </span>
-          </div>
-          <button className="btn btn-primary" onClick={handleBackup}>
-            Créer une sauvegarde
+        <div className="settings-actions">
+          <button
+            className="btn btn-primary"
+            onClick={handleSave}
+            disabled={saving}
+          >
+            {saving ? "Enregistrement..." : "Enregistrer les paramètres"}
           </button>
         </div>
-        {backupResult && <div className="setting-hint">Backup: {backupResult}</div>}
-
-        <div className="setting-item">
-          <div className="setting-info">
-            <label>Restaurer un backup</label>
-            <span className="setting-description">
-              Restaure depuis un fichier backup JSON
-            </span>
-          </div>
-          <div className="inline-controls">
-            <button className="btn btn-secondary" onClick={handlePickRestoreFile}>
-              Parcourir...
-            </button>
-            {restorePath && <span className="setting-description" style={{ fontSize: 11 }}>{restorePath}</span>}
-            <button className="btn btn-primary" onClick={handleRestore} disabled={!restorePath.trim()}>
-              Restaurer
-            </button>
-          </div>
-        </div>
-        {restoreResult && <div className="setting-hint">Backup pré-restauration: {restoreResult}</div>}
-      </div>
-
-      <div className="settings-section">
-        <h3>Mises à jour</h3>
-
-        <div className="setting-item">
-          <div className="setting-info">
-            <label>Vérifier les mises à jour</label>
-            <span className="setting-description">
-              Recherche de nouvelles versions de SyncMark
-            </span>
-          </div>
-          <button className="btn btn-primary" onClick={handleCheckUpdates} disabled={checkingUpdate}>
-            {checkingUpdate ? "Vérification..." : "Vérifier"}
-          </button>
-        </div>
-        {updateStatus && <div className="setting-hint">{updateStatus}</div>}
-      </div>
-
-      <div className="settings-actions">
-        <button
-          className="btn btn-primary"
-          onClick={handleSave}
-          disabled={saving}
-        >
-          {saving ? "Enregistrement..." : "Enregistrer les paramètres"}
-        </button>
       </div>
     </div>
   );

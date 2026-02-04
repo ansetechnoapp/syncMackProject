@@ -138,122 +138,124 @@ export default function SmartFolders() {
   );
 
   return (
-    <div className="settings" style={{ maxWidth: 900 }}>
-      <h2>Dossiers intelligents</h2>
+    <div className="scrollable-page">
+      <div className="settings" style={{ maxWidth: 900 }}>
+        <h2>Dossiers intelligents</h2>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
-        {([
-          ['recent', 'Recents'],
-          ['domains', 'Par domaine'],
-          ['duplicates', 'Doublons'],
-          ['custom', 'Filtres perso'],
-        ] as const).map(([key, label]) => (
-          <button
-            key={key}
-            className={`btn-xs ${activeTab === key ? 'btn-primary' : 'btn-outline'}`}
-            onClick={() => setActiveTab(key)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {loading && <div className="loading">Chargement...</div>}
-
-      {!loading && activeTab === 'recent' && (
-        <div className="settings-section">
-          <h3>Favoris recents (7 derniers jours)</h3>
-          {renderBookmarkList(recentBookmarks)}
-        </div>
-      )}
-
-      {!loading && activeTab === 'domains' && (
-        <div>
-          {domainGroups.slice(0, 20).map(group => (
-            <div key={group.domain} className="settings-section" style={{ marginBottom: 12 }}>
-              <h3>{group.domain} ({group.count})</h3>
-              {renderBookmarkList(group.bookmarks.slice(0, 10))}
-              {group.bookmarks.length > 10 && (
-                <div className="muted" style={{ padding: '8px 0' }}>
-                  ... et {group.bookmarks.length - 10} autres
-                </div>
-              )}
-            </div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+          {([
+            ['recent', 'Recents'],
+            ['domains', 'Par domaine'],
+            ['duplicates', 'Doublons'],
+            ['custom', 'Filtres perso'],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              className={`btn-xs ${activeTab === key ? 'btn-primary' : 'btn-outline'}`}
+              onClick={() => setActiveTab(key)}
+            >
+              {label}
+            </button>
           ))}
         </div>
-      )}
 
-      {!loading && activeTab === 'duplicates' && (
-        <div>
-          {duplicates.length === 0 ? (
-            <div className="empty-state">Aucun doublon detecte</div>
-          ) : (
-            duplicates.map(group => (
-              <div key={group.url} className="settings-section" style={{ marginBottom: 12 }}>
-                <h3 style={{ wordBreak: 'break-all' }}>{group.url} ({group.count} copies)</h3>
-                {renderBookmarkList(group.bookmarks)}
-              </div>
-            ))
-          )}
-        </div>
-      )}
+        {loading && <div className="loading">Chargement...</div>}
 
-      {!loading && activeTab === 'custom' && (
-        <div>
-          <div className="settings-section" style={{ marginBottom: 15 }}>
-            <h3>Nouveau filtre</h3>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-              <input
-                className="input-text"
-                placeholder="Nom du filtre"
-                value={newFilterName}
-                onChange={e => setNewFilterName(e.target.value)}
-                style={{ flex: 1, minWidth: 150 }}
-              />
-              <input
-                className="input-text"
-                placeholder="Mot-cle"
-                value={newFilterKeyword}
-                onChange={e => setNewFilterKeyword(e.target.value)}
-                style={{ flex: 1, minWidth: 150 }}
-              />
-              <input
-                className="input-text"
-                placeholder="Domaine"
-                value={newFilterDomain}
-                onChange={e => setNewFilterDomain(e.target.value)}
-                style={{ flex: 1, minWidth: 150 }}
-              />
-              <button className="btn btn-primary" onClick={handleCreateFilter} disabled={!newFilterName.trim()}>
-                Creer
-              </button>
-            </div>
+        {!loading && activeTab === 'recent' && (
+          <div className="settings-section">
+            <h3>Favoris recents (7 derniers jours)</h3>
+            {renderBookmarkList(recentBookmarks)}
           </div>
+        )}
 
-          {customFilters.map(f => (
-            <div key={f.id} className="settings-section" style={{ marginBottom: 12 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <h3 style={{ margin: 0 }}>{f.name}</h3>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <button className="btn-xs btn-outline" onClick={() => handleApplyFilter(f)}>Appliquer</button>
-                  <button className="btn-xs btn-outline text-danger" onClick={() => handleDeleteFilter(f.id)}>Supprimer</button>
+        {!loading && activeTab === 'domains' && (
+          <div>
+            {domainGroups.slice(0, 20).map(group => (
+              <div key={group.domain} className="settings-section" style={{ marginBottom: 12 }}>
+                <h3>{group.domain} ({group.count})</h3>
+                {renderBookmarkList(group.bookmarks.slice(0, 10))}
+                {group.bookmarks.length > 10 && (
+                  <div className="muted" style={{ padding: '8px 0' }}>
+                    ... et {group.bookmarks.length - 10} autres
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {!loading && activeTab === 'duplicates' && (
+          <div>
+            {duplicates.length === 0 ? (
+              <div className="empty-state">Aucun doublon detecte</div>
+            ) : (
+              duplicates.map(group => (
+                <div key={group.url} className="settings-section" style={{ marginBottom: 12 }}>
+                  <h3 style={{ wordBreak: 'break-all' }}>{group.url} ({group.count} copies)</h3>
+                  {renderBookmarkList(group.bookmarks)}
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
+        {!loading && activeTab === 'custom' && (
+          <div>
+            <div className="settings-section" style={{ marginBottom: 15 }}>
+              <h3>Nouveau filtre</h3>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <input
+                  className="input-text"
+                  placeholder="Nom du filtre"
+                  value={newFilterName}
+                  onChange={e => setNewFilterName(e.target.value)}
+                  style={{ flex: 1, minWidth: 150 }}
+                />
+                <input
+                  className="input-text"
+                  placeholder="Mot-cle"
+                  value={newFilterKeyword}
+                  onChange={e => setNewFilterKeyword(e.target.value)}
+                  style={{ flex: 1, minWidth: 150 }}
+                />
+                <input
+                  className="input-text"
+                  placeholder="Domaine"
+                  value={newFilterDomain}
+                  onChange={e => setNewFilterDomain(e.target.value)}
+                  style={{ flex: 1, minWidth: 150 }}
+                />
+                <button className="btn btn-primary" onClick={handleCreateFilter} disabled={!newFilterName.trim()}>
+                  Creer
+                </button>
+              </div>
+            </div>
+
+            {customFilters.map(f => (
+              <div key={f.id} className="settings-section" style={{ marginBottom: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <h3 style={{ margin: 0 }}>{f.name}</h3>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button className="btn-xs btn-outline" onClick={() => handleApplyFilter(f)}>Appliquer</button>
+                    <button className="btn-xs btn-outline text-danger" onClick={() => handleDeleteFilter(f.id)}>Supprimer</button>
+                  </div>
+                </div>
+                <div className="muted">
+                  {f.keyword && `Mot-cle: ${f.keyword}`}
+                  {f.domainPattern && ` | Domaine: ${f.domainPattern}`}
                 </div>
               </div>
-              <div className="muted">
-                {f.keyword && `Mot-cle: ${f.keyword}`}
-                {f.domainPattern && ` | Domaine: ${f.domainPattern}`}
-              </div>
-            </div>
-          ))}
+            ))}
 
-          {customResults.length > 0 && (
-            <div className="settings-section">
-              <h3>Resultats ({customResults.length})</h3>
-              {renderBookmarkList(customResults)}
-            </div>
-          )}
-        </div>
-      )}
+            {customResults.length > 0 && (
+              <div className="settings-section">
+                <h3>Resultats ({customResults.length})</h3>
+                {renderBookmarkList(customResults)}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

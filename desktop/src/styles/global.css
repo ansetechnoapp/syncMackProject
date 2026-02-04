@@ -191,6 +191,13 @@ body {
   flex-direction: column;
 }
 
+.scrollable-page {
+  height: 100%;
+  width: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
 .dashboard-container,
 .workspaces-panel-kanban {
   height: 100%;

@@ -61,70 +61,72 @@ export default function SearchPanel() {
   }, {});
 
   return (
-    <div className="settings" style={{ maxWidth: 800 }}>
-      <h2>Recherche</h2>
+    <div className="scrollable-page">
+      <div className="settings" style={{ maxWidth: 800 }}>
+        <h2>Recherche</h2>
 
-      <div className="search-bar" style={{ marginBottom: 15 }}>
-        <input
-          type="text"
-          className="search-input"
-          placeholder="Rechercher dans tous les workspaces..."
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          autoFocus
-        />
-      </div>
-
-      {workspaces.length > 1 && (
-        <div style={{ display: 'flex', gap: 8, marginBottom: 15, flexWrap: 'wrap' }}>
-          {workspaces.map(ws => (
-            <button
-              key={ws.id}
-              className={`btn-xs ${selectedWorkspaceIds.includes(ws.id) ? 'btn-primary' : 'btn-outline'}`}
-              onClick={() => toggleWorkspaceFilter(ws.id)}
-              style={{ borderColor: ws.color || '#3498db' }}
-            >
-              {ws.name}
-            </button>
-          ))}
+        <div className="search-bar" style={{ marginBottom: 15 }}>
+          <input
+            type="text"
+            className="search-input"
+            placeholder="Rechercher dans tous les workspaces..."
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            autoFocus
+          />
         </div>
-      )}
 
-      {loading && <div className="loading">Recherche...</div>}
-
-      {!loading && results.length === 0 && query.trim().length >= 2 && (
-        <div className="empty-state">Aucun resultat</div>
-      )}
-
-      {!loading && Object.entries(grouped).map(([wsName, items]) => (
-        <div key={wsName} className="settings-section" style={{ marginBottom: 15 }}>
-          <h3>{wsName} ({items.length})</h3>
-          <div>
-            {items.map(item => (
-              <div key={`${item.workspaceId}-${item.itemId}`} className="bookmark-item compact">
-                <span className="icon">{item.itemType === 'folder' ? '📁' : '🔖'}</span>
-                <div className="content" style={{ flex: 1, overflow: 'hidden' }}>
-                  {item.url ? (
-                    <a href={item.url} target="_blank" rel="noopener noreferrer" className="title">
-                      {item.title}
-                    </a>
-                  ) : (
-                    <span className="title">{item.title}</span>
-                  )}
-                  {item.url && (
-                    <span className="url" style={{ display: 'block', fontSize: 11, color: 'var(--text-secondary)' }}>
-                      {item.url}
-                    </span>
-                  )}
-                </div>
-                <span className="badge" style={{ fontSize: 10 }}>
-                  {Math.round(item.relevanceScore * 100)}%
-                </span>
-              </div>
+        {workspaces.length > 1 && (
+          <div style={{ display: 'flex', gap: 8, marginBottom: 15, flexWrap: 'wrap' }}>
+            {workspaces.map(ws => (
+              <button
+                key={ws.id}
+                className={`btn-xs ${selectedWorkspaceIds.includes(ws.id) ? 'btn-primary' : 'btn-outline'}`}
+                onClick={() => toggleWorkspaceFilter(ws.id)}
+                style={{ borderColor: ws.color || '#3498db' }}
+              >
+                {ws.name}
+              </button>
             ))}
           </div>
-        </div>
-      ))}
+        )}
+
+        {loading && <div className="loading">Recherche...</div>}
+
+        {!loading && results.length === 0 && query.trim().length >= 2 && (
+          <div className="empty-state">Aucun resultat</div>
+        )}
+
+        {!loading && Object.entries(grouped).map(([wsName, items]) => (
+          <div key={wsName} className="settings-section" style={{ marginBottom: 15 }}>
+            <h3>{wsName} ({items.length})</h3>
+            <div>
+              {items.map(item => (
+                <div key={`${item.workspaceId}-${item.itemId}`} className="bookmark-item compact">
+                  <span className="icon">{item.itemType === 'folder' ? '📁' : '🔖'}</span>
+                  <div className="content" style={{ flex: 1, overflow: 'hidden' }}>
+                    {item.url ? (
+                      <a href={item.url} target="_blank" rel="noopener noreferrer" className="title">
+                        {item.title}
+                      </a>
+                    ) : (
+                      <span className="title">{item.title}</span>
+                    )}
+                    {item.url && (
+                      <span className="url" style={{ display: 'block', fontSize: 11, color: 'var(--text-secondary)' }}>
+                        {item.url}
+                      </span>
+                    )}
+                  </div>
+                  <span className="badge" style={{ fontSize: 10 }}>
+                    {Math.round(item.relevanceScore * 100)}%
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
