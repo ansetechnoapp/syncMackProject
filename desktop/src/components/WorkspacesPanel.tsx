@@ -16,7 +16,9 @@ import {
   Plus,
   Trash2,
   Undo2,
-  Redo2
+  Redo2,
+  LayoutGrid,
+  Columns
 } from 'lucide-react';
 import {
   getWorkspaces,
@@ -55,7 +57,34 @@ interface DragItemData {
   sourceWorkspaceId?: string;
 }
 
+const STORAGE_KEY_VIEW_MODE = 'syncmark_workspaces_view_mode';
+
 export default function WorkspacesPanel() {
+  // View/Display Mode - Default to horizontal, will be updated from localStorage
+  const [viewMode, setViewMode] = useState<'horizontal' | 'vertical'>('horizontal');
+
+  // Load viewMode from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_VIEW_MODE);
+      if (saved === 'vertical' || saved === 'horizontal') {
+        setViewMode(saved);
+      }
+    } catch (e) {
+      console.error('Failed to read viewMode from localStorage:', e);
+    }
+  }, []);
+
+  // Persist viewMode changes to localStorage
+  const handleSetViewMode = (mode: 'horizontal' | 'vertical') => {
+    setViewMode(mode);
+    try {
+      localStorage.setItem(STORAGE_KEY_VIEW_MODE, mode);
+    } catch (e) {
+      console.error('Failed to save viewMode to localStorage:', e);
+    }
+  };
+
   // ... (state remains valid, just updating imports) 
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [assignments, setAssignments] = useState<WorkspaceAssignment[]>([]);
@@ -353,6 +382,34 @@ export default function WorkspacesPanel() {
         <div className="board-header">
           <h2>Workspaces</h2>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            <div className="view-toggle" style={{ display: 'flex', background: 'var(--bg-input)', borderRadius: '6px', padding: '2px', marginRight: '8px' }}>
+              <button
+                onClick={() => handleSetViewMode('horizontal')}
+                className={`btn-icon-small ${viewMode === 'horizontal' ? 'active' : ''}`}
+                style={{
+                  padding: '6px',
+                  borderRadius: '4px',
+                  background: viewMode === 'horizontal' ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
+                  color: viewMode === 'horizontal' ? 'var(--primary)' : 'var(--text-secondary)'
+                }}
+                title="Vue horizontale"
+              >
+                <Columns size={18} />
+              </button>
+              <button
+                onClick={() => handleSetViewMode('vertical')}
+                className={`btn-icon-small ${viewMode === 'vertical' ? 'active' : ''}`}
+                style={{
+                  padding: '6px',
+                  borderRadius: '4px',
+                  background: viewMode === 'vertical' ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
+                  color: viewMode === 'vertical' ? 'var(--primary)' : 'var(--text-secondary)'
+                }}
+                title="Vue grille verticale"
+              >
+                <LayoutGrid size={18} />
+              </button>
+            </div>
             <button className="btn-xs btn-outline" onClick={undo} disabled={!canUndo} title="Annuler (Ctrl+Z)">
               <Undo2 size={16} />
             </button>
@@ -382,8 +439,8 @@ export default function WorkspacesPanel() {
           </span>
         </div>
 
-        <div className="board-content">
-          <div className="board-columns-container">
+        <div className="board-content" style={{ overflowY: viewMode === 'vertical' ? 'auto' : 'hidden' }}>
+          <div className={`board-columns-container ${viewMode === 'vertical' ? 'vertical-grid' : ''}`}>
             {workspaces.map(ws => (
               <div key={ws.id} style={{ position: 'relative' }}>
                 <WorkspaceColumn

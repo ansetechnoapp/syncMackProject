@@ -262,6 +262,30 @@ body {
   align-items: flex-start;
 }
 
+.board-columns-container.vertical-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 24px;
+  width: 100%;
+  min-width: 0;
+  padding-bottom: 32px;
+  /* Ensure scrolling happens on the parent */
+  height: auto;
+}
+
+.vertical-grid>div {
+  display: flex;
+  flex-direction: column;
+  height: 600px;
+  /* Fixed height for consistency in grid view */
+}
+
+.vertical-grid .workspace-column {
+  width: 100%;
+  min-width: 0;
+  flex: 1;
+}
+
 /* Individual Workspace Column */
 .workspace-column {
   width: 340px;
