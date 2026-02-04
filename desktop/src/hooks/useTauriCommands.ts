@@ -165,10 +165,10 @@ export interface BatchMoveResult {
 }
 
 export interface WorkspaceAssignment {
-  browser_id: string;
-  browser_name: string;
-  workspace_id?: string;
-  assigned_at: string;
+  browserId: string;
+  browserName: string;
+  workspaceId?: string;
+  assignedAt: string;
 }
 
 export async function getConfig(): Promise<Config> {

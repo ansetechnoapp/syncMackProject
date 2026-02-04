@@ -97,8 +97,14 @@ export default function WorkspaceColumn({
   const bookmarkCount = tree?.total_bookmarks || bookmarks.length;
 
   // Trouver le navigateur assigné à ce workspace
-  const assignedBrowser = assignments.find(a => a.workspace_id === workspaceId);
-  const assignedBrowserId = assignedBrowser?.browser_id || "";
+  const assignedBrowser = assignments.find(a => a.workspaceId === workspaceId);
+  const assignedBrowserId = assignedBrowser?.browserId || "";
+  const assignedBrowserName = assignedBrowser?.browserName || "";
+
+  // Vérifier si le navigateur assigné est dans la liste des clients connectés
+  const assignedIsConnected = assignedBrowserId
+    ? clients.some(c => c.browser_instance_id === assignedBrowserId)
+    : false;
 
   const handleBrowserChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const value = e.target.value;
@@ -126,14 +132,21 @@ export default function WorkspaceColumn({
             className="browser-select-compact"
           >
             <option value="">-- Assigner un navigateur --</option>
+            {/* Si le navigateur assigné n'est pas connecté, l'afficher quand même */}
+            {assignedBrowserId && !assignedIsConnected && (
+              <option key={`assigned-${assignedBrowserId}`} value={assignedBrowserId}>
+                {assignedBrowserName || "Navigateur Inconnu"} (hors ligne)
+              </option>
+            )}
             {clients.map(client => {
               const browserId = client.browser_instance_id;
+              const isAssigned = browserId === assignedBrowserId;
               const label = (!client.browser || client.browser === "Unknown" || client.browser === "Unknown Browser")
                 ? "Navigateur Inconnu"
-                : `${client.browser}`;
+                : client.browser;
               return (
                 <option key={client.id} value={browserId}>
-                  {label}
+                  {label}{isAssigned ? " (assigné)" : ""}
                 </option>
               );
             })}
