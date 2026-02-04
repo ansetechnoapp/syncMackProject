@@ -1501,3 +1501,23 @@ input:checked+.slider:before {
 .spin {
   animation: spin 1s linear infinite;
 }
+
+/* Settings Grid Row for side-by-side sections */
+.settings-grid-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.settings-grid-row .settings-section {
+  margin-bottom: 0;
+  height: 100%;
+  /* Ensure equal height */
+}
+
+@media (max-width: 768px) {
+  .settings-grid-row {
+    grid-template-columns: 1fr;
+  }
+}

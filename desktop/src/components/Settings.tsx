@@ -347,55 +347,38 @@ function Settings() {
           </div>
         </div>
 
-        <div className="settings-section">
-          <h3>Sauvegarde</h3>
 
-          <div className="setting-item">
-            <div className="setting-info">
-              <label>Sauvegardes automatiques</label>
-              <span className="setting-description">
-                Créer des sauvegardes avant chaque synchronisation
-              </span>
-            </div>
-            <label className="switch">
+
+        <div className="settings-grid-row">
+          <div className="settings-section">
+            <h3>Réseau</h3>
+
+            <div className="setting-item">
+              <div className="setting-info">
+                <label>Port WebSocket</label>
+                <span className="setting-description">
+                  Port pour la communication avec les extensions (redémarrage requis)
+                </span>
+              </div>
               <input
-                type="checkbox"
-                checked={config.backup_enabled}
-                onChange={(e) => updateConfig("backup_enabled", e.target.checked)}
+                type="number"
+                className="input-number"
+                value={config.websocket_port}
+                min={1024}
+                max={65535}
+                onChange={(e) => updateConfig("websocket_port", parseInt(e.target.value) || 9876)}
               />
-              <span className="slider"></span>
-            </label>
-          </div>
-        </div>
-
-        <div className="settings-section">
-          <h3>Réseau</h3>
-
-          <div className="setting-item">
-            <div className="setting-info">
-              <label>Port WebSocket</label>
-              <span className="setting-description">
-                Port pour la communication avec les extensions (redémarrage requis)
-              </span>
             </div>
-            <input
-              type="number"
-              className="input-number"
-              value={config.websocket_port}
-              min={1024}
-              max={65535}
-              onChange={(e) => updateConfig("websocket_port", parseInt(e.target.value) || 9876)}
-            />
           </div>
-        </div>
 
-        <div className="settings-section">
-          <h3>Stockage</h3>
+          <div className="settings-section">
+            <h3>Stockage</h3>
 
-          <div className="setting-item">
-            <div className="setting-info">
-              <label>Répertoire de données</label>
-              <span className="setting-description data-path">{dataDir}</span>
+            <div className="setting-item">
+              <div className="setting-info">
+                <label>Répertoire de données</label>
+                <span className="setting-description data-path">{dataDir}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -481,21 +464,44 @@ function Settings() {
           {restoreResult && <div className="setting-hint">Backup pré-restauration: {restoreResult}</div>}
         </div>
 
-        <div className="settings-section">
-          <h3>Mises à jour</h3>
+        <div className="settings-grid-row">
+          <div className="settings-section">
+            <h3>Sauvegarde</h3>
 
-          <div className="setting-item">
-            <div className="setting-info">
-              <label>Vérifier les mises à jour</label>
-              <span className="setting-description">
-                Recherche de nouvelles versions de SyncMark
-              </span>
+            <div className="setting-item">
+              <div className="setting-info">
+                <label>Sauvegardes automatiques</label>
+                <span className="setting-description">
+                  Créer des sauvegardes avant chaque synchronisation
+                </span>
+              </div>
+              <label className="switch">
+                <input
+                  type="checkbox"
+                  checked={config.backup_enabled}
+                  onChange={(e) => updateConfig("backup_enabled", e.target.checked)}
+                />
+                <span className="slider"></span>
+              </label>
             </div>
-            <button className="btn btn-primary" onClick={handleCheckUpdates} disabled={checkingUpdate}>
-              {checkingUpdate ? "Vérification..." : "Vérifier"}
-            </button>
           </div>
-          {updateStatus && <div className="setting-hint">{updateStatus}</div>}
+
+          <div className="settings-section">
+            <h3>Mises à jour</h3>
+
+            <div className="setting-item">
+              <div className="setting-info">
+                <label>Vérifier les mises à jour</label>
+                <span className="setting-description">
+                  Recherche de nouvelles versions de SyncMark
+                </span>
+              </div>
+              <button className="btn btn-primary" onClick={handleCheckUpdates} disabled={checkingUpdate}>
+                {checkingUpdate ? "Vérification..." : "Vérifier"}
+              </button>
+            </div>
+            {updateStatus && <div className="setting-hint">{updateStatus}</div>}
+          </div>
         </div>
 
         <div className="settings-actions">
