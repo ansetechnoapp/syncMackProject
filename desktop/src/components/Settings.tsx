@@ -13,9 +13,13 @@ import {
   type WorkspaceSummary,
   type Config,
 } from "../hooks/useTauriCommands";
+import { useTheme } from "../hooks/useTheme";
+import { Moon, Sun, Monitor } from "lucide-react";
 
 function Settings() {
   const [config, setConfig] = useState<Config | null>(null);
+  const { theme, setTheme } = useTheme();
+  // ... other state variables ...
   const [dataDir, setDataDir] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -31,6 +35,8 @@ function Settings() {
   const [restoreResult, setRestoreResult] = useState<string>("");
   const [updateStatus, setUpdateStatus] = useState<string>("");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+
+  // ... loadData and useEffect ...
 
   const loadData = async () => {
     setLoading(true);
@@ -62,7 +68,9 @@ function Settings() {
     setMessage(null);
 
     try {
-      const success = await saveConfig(config);
+      // Save theme preference as well if needed, though useTheme handles it immediately
+      const configToSave = { ...config, theme };
+      const success = await saveConfig(configToSave);
       if (success) {
         setMessage({ type: "success", text: "Paramètres enregistrés avec succès" });
       } else {
@@ -75,6 +83,7 @@ function Settings() {
     }
   };
 
+  // ... other handlers ...
   const handleExportWorkspace = async () => {
     if (!exportWorkspaceId) return;
     try {
@@ -200,6 +209,7 @@ function Settings() {
     );
   }
 
+
   return (
     <div className="scrollable-page">
       <div className="settings">
@@ -210,6 +220,60 @@ function Settings() {
             {message.text}
           </div>
         )}
+
+        <div className="settings-section">
+          <h3>Apparence</h3>
+
+          <div className="setting-item">
+            <div className="setting-info">
+              <label>Thème de l'interface</label>
+              <span className="setting-description">
+                Choisissez l'apparence de SyncMark
+              </span>
+            </div>
+            <div className="theme-selector" style={{ display: 'flex', gap: '8px', background: 'var(--bg-input)', padding: '4px', borderRadius: 'var(--radius-md)' }}>
+              <button
+                className={`btn-icon-small ${theme === 'light' ? 'active' : ''}`}
+                onClick={() => setTheme('light')}
+                title="Mode Clair"
+                style={{
+                  background: theme === 'light' ? 'var(--bg-card)' : 'transparent',
+                  color: theme === 'light' ? 'var(--primary)' : 'var(--text-secondary)',
+                  boxShadow: theme === 'light' ? 'var(--shadow-sm)' : 'none',
+                  width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center'
+                }}
+              >
+                <Sun size={18} />
+              </button>
+              <button
+                className={`btn-icon-small ${theme === 'dark' ? 'active' : ''}`}
+                onClick={() => setTheme('dark')}
+                title="Mode Sombre"
+                style={{
+                  background: theme === 'dark' ? 'var(--bg-card)' : 'transparent',
+                  color: theme === 'dark' ? 'var(--primary)' : 'var(--text-secondary)',
+                  boxShadow: theme === 'dark' ? 'var(--shadow-sm)' : 'none',
+                  width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center'
+                }}
+              >
+                <Moon size={18} />
+              </button>
+              <button
+                className={`btn-icon-small ${theme === 'system' ? 'active' : ''}`}
+                onClick={() => setTheme('system')}
+                title="Système"
+                style={{
+                  background: theme === 'system' ? 'var(--bg-card)' : 'transparent',
+                  color: theme === 'system' ? 'var(--primary)' : 'var(--text-secondary)',
+                  boxShadow: theme === 'system' ? 'var(--shadow-sm)' : 'none',
+                  width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center'
+                }}
+              >
+                <Monitor size={18} />
+              </button>
+            </div>
+          </div>
+        </div>
 
         <div className="settings-section">
           <h3>Synchronisation</h3>

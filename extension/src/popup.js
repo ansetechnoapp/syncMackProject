@@ -9,6 +9,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const workspaceColor = document.getElementById('workspaceColor');
     const workspaceSelect = document.getElementById('workspaceSelect');
 
+    // Thème
+    const applyTheme = () => {
+        const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+    };
+
+    applyTheme();
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener('change', applyTheme);
+
     // État local
     let currentWorkspace = null;
     let availableWorkspaces = [];

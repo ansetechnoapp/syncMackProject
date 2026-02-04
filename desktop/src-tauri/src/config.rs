@@ -24,6 +24,8 @@ pub struct Config {
     pub websocket_port: u16,
     #[serde(default)]
     pub client_id: Option<String>,
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 fn default_enabled() -> bool { true }
@@ -32,6 +34,7 @@ fn default_sync_interval() -> u64 { 300 }
 fn default_max_bookmarks() -> usize { 10000 }
 fn default_backup_enabled() -> bool { true }
 fn default_websocket_port() -> u16 { 9876 }
+fn default_theme() -> String { "dark".to_string() }
 
 impl Default for Config {
     fn default() -> Self {
@@ -43,6 +46,7 @@ impl Default for Config {
             backup_enabled: default_backup_enabled(),
             websocket_port: default_websocket_port(),
             client_id: Some(Uuid::new_v4().to_string()),
+            theme: default_theme(),
         }
     }
 }

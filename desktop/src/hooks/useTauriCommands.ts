@@ -31,6 +31,7 @@ export interface Config {
   max_bookmarks: number;
   backup_enabled: boolean;
   websocket_port: number;
+  theme?: "light" | "dark" | "system";
 }
 
 export interface BookmarkData {
